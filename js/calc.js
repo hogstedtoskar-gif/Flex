@@ -1,0 +1,388 @@
+/* calc.js - Pure time math functions. No DOM, no storage. */
+
+const Calc = (() => {
+
+  function pad(n) { return n < 10 ? '0' + n : '' + n; }
+
+  function toDateKey(d) {
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
+  function parseDateKey(key) {
+    const [y, m, d] = key.split('-').map(Number);
+    return new Date(y, m - 1, d);
+  }
+
+  function parseHM(hm) {
+    if (!hm || typeof hm !== 'string') return null;
+    const parts = hm.split(':');
+    if (parts.length < 2) return null;
+    const h = parseInt(parts[0], 10);
+    const m = parseInt(parts[1], 10);
+    if (Number.isNaN(h) || Number.isNaN(m)) return null;
+    return h * 60 + m;
+  }
+
+  function formatHours(hours, opts = {}) {
+    if (hours == null || Number.isNaN(hours)) return '—';
+    const sign = hours < 0 ? '-' : '';
+    const abs = Math.abs(hours);
+    const totalMinutes = Math.round(abs * 60);
+    const h = Math.floor(totalMinutes / 60);
+    const m = totalMinutes % 60;
+    if (opts.compact) return sign + h + 'h' + (m ? ' ' + m + 'm' : '');
+    return sign + h + 'h ' + pad(m) + 'm';
+  }
+
+  function minutesToHours(min) { return min / 60; }
+
+  /**
+   * Compute duration for an entry. Handles open (missing end) entries as 0.
+   * Supports overnight by wrap-around if end < start.
+   */
+  function entryMinutes(entry) {
+    const s = parseHM(entry.start);
+    const e = parseHM(entry.end);
+    if (s == null || e == null) return 0;
+    let diff = e - s;
+    if (diff < 0) diff += 24 * 60;
+    return diff;
+  }
+
+  /**
+   * Validate entries for a single day.
+   * Returns { errors: [{ id, message }], warnings: [{ id?, message }] }.
+   */
+  function validateDay(entries) {
+    const errors = [];
+    const warnings = [];
+    if (!entries || !entries.length) return { errors, warnings };
+
+    // Check each entry
+    for (const e of entries) {
+      const s = parseHM(e.start);
+      const eh = parseHM(e.end);
+      if (e.start && s == null) errors.push({ id: e.id, message: 'Invalid start time' });
+      if (e.end && eh == null) errors.push({ id: e.id, message: 'Invalid end time' });
+      if (s != null && eh != null) {
+        const diff = eh - s;
+        if (diff <= 0) {
+          // allow negative only if user really meant overnight; treat 0 as error
+          if (diff === 0) errors.push({ id: e.id, message: 'Zero duration' });
+        }
+      }
+      if (!e.start) errors.push({ id: e.id, message: 'Missing start time' });
+    }
+
+    // Open segments (missing end)
+    const openCount = entries.filter(e => e.start && !e.end).length;
+    if (openCount > 1) {
+      errors.push({ message: 'Multiple open segments (missing end time)' });
+    }
+
+    // Overlap check across closed entries
+    const closed = entries
+      .filter(e => e.start && e.end && parseHM(e.start) != null && parseHM(e.end) != null)
+      .map(e => ({ id: e.id, s: parseHM(e.start), eh: parseHM(e.end) }))
+      .sort((a, b) => a.s - b.s);
+
+    for (let i = 1; i < closed.length; i++) {
+      if (closed[i].s < closed[i - 1].eh) {
+        errors.push({
+          id: closed[i].id,
+          message: 'Overlaps with another segment'
+        });
+      }
+    }
+
+    return { errors, warnings };
+  }
+
+  /**
+   * Compute totals for a single day.
+   * Returns: { workedHours, lunchHours, regular, extra, shortfall, hasOpen }
+   */
+  function computeDay(day, settings) {
+    const entries = (day && day.entries) || [];
+    let workedMin = 0;
+    let lunchMin = 0;
+    let hasOpen = false;
+    for (const e of entries) {
+      if (!e.start) continue;
+      if (!e.end) { hasOpen = true; continue; }
+      const m = entryMinutes(e);
+      if (e.type === 'work') workedMin += m;
+      else if (e.type === 'lunch') lunchMin += m;
+    }
+    const workedHours = minutesToHours(workedMin);
+    const lunchHours = minutesToHours(lunchMin);
+    const regular = Math.min(workedHours, settings.regularHoursPerDay);
+    const extra = Math.max(0, workedHours - settings.regularHoursPerDay);
+    const shortfall = Math.max(0, settings.regularHoursPerDay - workedHours);
+    return { workedHours, lunchHours, regular, extra, shortfall, hasOpen };
+  }
+
+  /**
+   * Get the Date corresponding to the start of the week containing `date`.
+   * weekStartDay: 0=Sun, 1=Mon, 6=Sat.
+   */
+  function weekStart(date, weekStartDay) {
+    const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    const dow = d.getDay();
+    const diff = (dow - weekStartDay + 7) % 7;
+    d.setDate(d.getDate() - diff);
+    return d;
+  }
+
+  function weekEnd(date, weekStartDay) {
+    const s = weekStart(date, weekStartDay);
+    const e = new Date(s);
+    e.setDate(e.getDate() + 6);
+    return e;
+  }
+
+  function addDays(date, n) {
+    const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    d.setDate(d.getDate() + n);
+    return d;
+  }
+
+  function sameDay(a, b) {
+    return a.getFullYear() === b.getFullYear()
+      && a.getMonth() === b.getMonth()
+      && a.getDate() === b.getDate();
+  }
+
+  /**
+   * Determine which overtime period week index a given date belongs to (0-based).
+   * Returns -1 if outside period.
+   */
+  function periodWeekIndex(date, settings) {
+    if (!settings.overtimePeriodStart || !settings.overtimePeriodWeeks) return -1;
+    const startDate = parseDateKey(settings.overtimePeriodStart);
+    const periodStart = weekStart(startDate, settings.weekStartDay);
+    const targetWeekStart = weekStart(date, settings.weekStartDay);
+    const msPerWeek = 7 * 24 * 60 * 60 * 1000;
+    const idx = Math.round((targetWeekStart - periodStart) / msPerWeek);
+    if (idx < 0 || idx >= settings.overtimePeriodWeeks) return -1;
+    return idx;
+  }
+
+  /**
+   * Compute a full week's allocation. Walks days in order and fills overtime before flex.
+   * Returns per-day allocation + weekly totals.
+   */
+  function computeWeek(weekStartDate, daysMap, settings) {
+    const inPeriod = periodWeekIndex(weekStartDate, settings) !== -1;
+    const target = settings.weeklyOvertimeTargetHours;
+
+    const days = [];
+    let overtimeFilled = 0;
+    let flexGain = 0;
+    let shortfall = 0;
+    let regularTotal = 0;
+    let workedTotal = 0;
+
+    for (let i = 0; i < 7; i++) {
+      const d = addDays(weekStartDate, i);
+      const key = toDateKey(d);
+      const day = daysMap[key];
+      const c = computeDay(day, settings);
+      let toOvertime = 0;
+      let toFlex = 0;
+      if (inPeriod) {
+        const remaining = Math.max(0, target - overtimeFilled);
+        toOvertime = Math.min(remaining, c.extra);
+        toFlex = c.extra - toOvertime;
+      } else {
+        toFlex = c.extra;
+      }
+      overtimeFilled += toOvertime;
+      flexGain += toFlex;
+      shortfall += c.shortfall;
+      regularTotal += c.regular;
+      workedTotal += c.workedHours;
+
+      days.push({
+        date: d,
+        dateKey: key,
+        day,
+        computed: c,
+        overtimeHours: toOvertime,
+        flexGainHours: toFlex
+      });
+    }
+
+    return {
+      weekStart: weekStartDate,
+      weekEnd: addDays(weekStartDate, 6),
+      inPeriod,
+      target,
+      overtimeFilled,
+      flexGain,
+      shortfall,
+      flexNet: flexGain - shortfall,
+      regularTotal,
+      workedTotal,
+      days
+    };
+  }
+
+  /**
+   * Compute cumulative flex balance across all stored days up to and including `upToDate`.
+   *
+   * Respects settings.flexOpeningBalance (added on top) and settings.flexOpeningDate
+   * (when set, only weeks whose start is strictly after that date contribute to
+   * the computed portion, so the opening balance represents flex up to that date).
+   */
+  function computeFlexBalance(daysMap, settings, upToDate) {
+    const opening = parseFloat(settings.flexOpeningBalance) || 0;
+    const keys = Object.keys(daysMap).sort();
+    if (!keys.length) return opening;
+
+    const firstDate = parseDateKey(keys[0]);
+    const lastDate = upToDate || parseDateKey(keys[keys.length - 1]);
+    let cursor = weekStart(firstDate, settings.weekStartDay);
+    const limit = weekEnd(lastDate, settings.weekStartDay);
+
+    let openingCutoff = null;
+    if (settings.flexOpeningDate) {
+      openingCutoff = parseDateKey(settings.flexOpeningDate);
+    }
+
+    let total = opening;
+    for (let i = 0; i < 520 && cursor <= limit; i++) {
+      if (openingCutoff && cursor <= openingCutoff) {
+        cursor = addDays(cursor, 7);
+        continue;
+      }
+      const w = computeWeek(cursor, daysMap, settings);
+      total += w.flexNet;
+      cursor = addDays(cursor, 7);
+    }
+    return total;
+  }
+
+  /**
+   * Compute overtime period summary: per-week filled, total filled, total required.
+   */
+  function computeOvertimePeriod(daysMap, settings) {
+    const result = {
+      totalRequired: settings.weeklyOvertimeTargetHours * settings.overtimePeriodWeeks,
+      totalFilled: 0,
+      weeks: []
+    };
+    if (!settings.overtimePeriodStart || !settings.overtimePeriodWeeks) return result;
+    const startDate = parseDateKey(settings.overtimePeriodStart);
+    let cursor = weekStart(startDate, settings.weekStartDay);
+    for (let i = 0; i < settings.overtimePeriodWeeks; i++) {
+      const w = computeWeek(cursor, daysMap, settings);
+      result.weeks.push({
+        index: i,
+        weekStart: new Date(cursor),
+        filled: w.overtimeFilled,
+        target: settings.weeklyOvertimeTargetHours
+      });
+      result.totalFilled += w.overtimeFilled;
+      cursor = addDays(cursor, 7);
+    }
+    return result;
+  }
+
+  /**
+   * Compute monthly rows (one per week) for a given month.
+   */
+  function computeMonth(year, month, daysMap, settings) {
+    const first = new Date(year, month, 1);
+    const last = new Date(year, month + 1, 0);
+    const firstWeekStart = weekStart(first, settings.weekStartDay);
+    const lastWeekStart = weekStart(last, settings.weekStartDay);
+    const weeks = [];
+    let cursor = new Date(firstWeekStart);
+    const totals = { regular: 0, overtime: 0, flexNet: 0, worked: 0 };
+    while (cursor <= lastWeekStart) {
+      const w = computeWeek(cursor, daysMap, settings);
+      weeks.push(w);
+      totals.regular += w.regularTotal;
+      totals.overtime += w.overtimeFilled;
+      totals.flexNet += w.flexNet;
+      totals.worked += w.workedTotal;
+      cursor = addDays(cursor, 7);
+    }
+    return { year, month, weeks, totals };
+  }
+
+  /**
+   * Current "state" of today based on last entry.
+   * Returns 'off' | 'working' | 'lunch'.
+   */
+  function currentStatus(day) {
+    const entries = (day && day.entries) || [];
+    if (!entries.length) return { state: 'off' };
+    // Find the entry without end (the open one)
+    const open = entries.find(e => e.start && !e.end);
+    if (open) {
+      return { state: open.type === 'lunch' ? 'lunch' : 'working', openEntry: open };
+    }
+    // Otherwise sort by start and look at last
+    const sorted = entries.slice().sort((a, b) => (parseHM(a.start) || 0) - (parseHM(b.start) || 0));
+    const last = sorted[sorted.length - 1];
+    return { state: 'off', lastEntry: last };
+  }
+
+  /**
+   * ISO week number for a given date.
+   */
+  function isoWeek(date) {
+    const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+    const dayNum = d.getUTCDay() || 7;
+    d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+    const week = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+    return { year: d.getUTCFullYear(), week };
+  }
+
+  function isoWeekString(date) {
+    const { year, week } = isoWeek(date);
+    return year + '-W' + pad(week);
+  }
+
+  function parseIsoWeek(str) {
+    // "YYYY-Www"
+    const m = /^(\d{4})-W(\d{2})$/.exec(str);
+    if (!m) return null;
+    const year = parseInt(m[1], 10);
+    const week = parseInt(m[2], 10);
+    // ISO week 1: week containing Jan 4
+    const jan4 = new Date(year, 0, 4);
+    const jan4Day = jan4.getDay() || 7;
+    const week1Start = new Date(year, 0, 4 - (jan4Day - 1));
+    const result = new Date(week1Start);
+    result.setDate(result.getDate() + (week - 1) * 7);
+    return result; // Monday of that ISO week
+  }
+
+  return {
+    pad,
+    toDateKey,
+    parseDateKey,
+    parseHM,
+    formatHours,
+    entryMinutes,
+    validateDay,
+    computeDay,
+    weekStart,
+    weekEnd,
+    addDays,
+    sameDay,
+    periodWeekIndex,
+    computeWeek,
+    computeFlexBalance,
+    computeOvertimePeriod,
+    computeMonth,
+    currentStatus,
+    isoWeek,
+    isoWeekString,
+    parseIsoWeek
+  };
+})();

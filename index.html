@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Time Tracker</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span class="brand-name">Time Tracker</span>
+    </div>
+    <nav class="tabs" id="tabs">
+      <button class="tab" data-view="dashboard">Dashboard</button>
+      <button class="tab" data-view="diary">Diary</button>
+      <button class="tab" data-view="summary">Summary</button>
+      <button class="tab" data-view="settings">Settings</button>
+    </nav>
+    <div class="topbar-right">
+      <span class="clock" id="live-clock"></span>
+    </div>
+  </header>
+
+  <main id="view-root" class="view-root"></main>
+
+  <div id="toast-root" class="toast-root" aria-live="polite"></div>
+
+  <!-- View templates -->
+  <template id="tpl-dashboard">
+    <section class="view view-dashboard">
+      <div class="grid-2">
+        <div class="card card-actions">
+          <div class="card-header">
+            <h2>Today</h2>
+            <span class="today-date" data-today-date></span>
+          </div>
+          <div class="status-row" data-status></div>
+          <div class="actions">
+            <button class="btn btn-primary btn-lg" data-action="clock-in">Clock in</button>
+            <button class="btn btn-warning btn-lg" data-action="lunch-start">Start lunch</button>
+            <button class="btn btn-warning btn-lg" data-action="lunch-end">End lunch</button>
+            <button class="btn btn-danger btn-lg" data-action="clock-out">Clock out</button>
+          </div>
+          <div class="today-totals" data-today-totals></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h2>This week</h2>
+            <span class="muted" data-week-range></span>
+          </div>
+          <div class="week-totals" data-week-totals></div>
+          <div class="progress-group" data-week-progress></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h2>Manual entry</h2>
+          <span class="muted">enter times for any day</span>
+        </div>
+        <form class="manual-form" data-manual-form>
+          <label>
+            <span>Date</span>
+            <input type="date" name="date" required />
+          </label>
+          <label>
+            <span>Clock in</span>
+            <input type="time" name="clockIn" required />
+          </label>
+          <label>
+            <span>Clock out</span>
+            <input type="time" name="clockOut" required />
+          </label>
+          <label>
+            <span>Lunch start <em class="muted small">(optional)</em></span>
+            <input type="time" name="lunchStart" />
+          </label>
+          <label>
+            <span>Lunch end <em class="muted small">(optional)</em></span>
+            <input type="time" name="lunchEnd" />
+          </label>
+          <label class="manual-mode">
+            <span>On existing entries</span>
+            <select name="mode">
+              <option value="replace">Replace day</option>
+              <option value="append">Append to day</option>
+            </select>
+          </label>
+          <div class="manual-actions">
+            <button type="submit" class="btn btn-primary">Save entry</button>
+            <button type="reset" class="btn btn-ghost">Clear</button>
+          </div>
+        </form>
+        <div class="manual-error" data-manual-error></div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-header">
+            <h2>Overtime period</h2>
+            <span class="muted" data-period-range></span>
+          </div>
+          <div class="period-summary" data-period-summary></div>
+          <div class="period-weeks" data-period-weeks></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h2>Flex balance</h2>
+            <span class="muted">all-time</span>
+          </div>
+          <div class="flex-display" data-flex-display></div>
+          <div class="alerts" data-alerts></div>
+        </div>
+      </div>
+    </section>
+  </template>
+
+  <template id="tpl-diary">
+    <section class="view view-diary">
+      <div class="card">
+        <div class="card-header">
+          <h2>Diary</h2>
+          <div class="diary-controls">
+            <button class="btn btn-ghost" data-action="prev-day" title="Previous day">&larr;</button>
+            <input type="date" data-diary-date />
+            <button class="btn btn-ghost" data-action="next-day" title="Next day">&rarr;</button>
+            <button class="btn btn-ghost" data-action="today-day">Today</button>
+          </div>
+        </div>
+        <div class="diary-day-summary" data-diary-summary></div>
+        <div class="diary-validation" data-diary-validation></div>
+        <div class="diary-entries" data-diary-entries></div>
+        <div class="diary-add">
+          <button class="btn btn-primary" data-action="add-entry">+ Add segment</button>
+        </div>
+        <div class="note-block">
+          <label for="diary-note">Note</label>
+          <textarea id="diary-note" data-diary-note placeholder="Notes for this day..."></textarea>
+        </div>
+      </div>
+    </section>
+  </template>
+
+  <template id="tpl-summary">
+    <section class="view view-summary">
+      <div class="card">
+        <div class="card-header">
+          <h2>Weekly summary</h2>
+          <div class="diary-controls">
+            <button class="btn btn-ghost" data-action="prev-week">&larr;</button>
+            <input type="week" data-week-picker />
+            <button class="btn btn-ghost" data-action="next-week">&rarr;</button>
+          </div>
+        </div>
+        <div data-week-table></div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h2>Monthly breakdown</h2>
+          <div class="diary-controls">
+            <button class="btn btn-ghost" data-action="prev-month">&larr;</button>
+            <input type="month" data-month-picker />
+            <button class="btn btn-ghost" data-action="next-month">&rarr;</button>
+          </div>
+        </div>
+        <div data-month-table></div>
+        <div data-month-chart class="chart-block"></div>
+      </div>
+    </section>
+  </template>
+
+  <template id="tpl-settings">
+    <section class="view view-settings">
+      <div class="card">
+        <div class="card-header"><h2>Settings</h2></div>
+        <form class="form-grid" data-settings-form>
+          <label>
+            <span>Week starts on</span>
+            <select name="weekStartDay">
+              <option value="1">Monday</option>
+              <option value="0">Sunday</option>
+              <option value="6">Saturday</option>
+            </select>
+          </label>
+          <label>
+            <span>Regular hours per day</span>
+            <input type="number" name="regularHoursPerDay" min="0" max="24" step="0.25" />
+          </label>
+          <label>
+            <span>Weekly overtime target (hours)</span>
+            <input type="number" name="weeklyOvertimeTargetHours" min="0" max="168" step="0.25" />
+          </label>
+          <label>
+            <span>Overtime period start</span>
+            <input type="date" name="overtimePeriodStart" />
+          </label>
+          <label>
+            <span>Overtime period length (weeks)</span>
+            <input type="number" name="overtimePeriodWeeks" min="0" max="52" step="1" />
+          </label>
+          <label>
+            <span>Default lunch (minutes)</span>
+            <input type="number" name="defaultLunchMinutes" min="0" max="240" step="5" />
+          </label>
+          <label>
+            <span>Opening flex balance (hours)</span>
+            <input type="number" name="flexOpeningBalance" step="0.25" />
+          </label>
+          <label>
+            <span>Opening flex as of <em class="muted small">(optional)</em></span>
+            <input type="date" name="flexOpeningDate" />
+          </label>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Save settings</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><h2>Data</h2></div>
+        <div class="data-actions">
+          <button class="btn" data-action="export-json">Export JSON backup</button>
+          <button class="btn" data-action="export-csv">Export CSV</button>
+          <label class="btn btn-ghost file-label">
+            Import JSON
+            <input type="file" accept="application/json" data-import-file hidden />
+          </label>
+        </div>
+        <p class="muted small">Import replaces all current data after confirmation.</p>
+      </div>
+
+      <div class="card danger-zone">
+        <div class="card-header"><h2>Danger zone</h2></div>
+        <button class="btn btn-danger" data-action="reset-all">Reset all data</button>
+      </div>
+    </section>
+  </template>
+
+  <script src="js/calc.js"></script>
+  <script src="js/storage.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
