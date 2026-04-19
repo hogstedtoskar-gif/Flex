@@ -1,27 +1,98 @@
 # Time Tracker
 
-A lightweight, single-user, fully-local web app for tracking working hours with clean separation of **regular time**, **ordered overtime**, and **flex balance**.
+A lightweight, single-user web app for tracking working hours with clean separation of **regular time**, **ordered overtime**, and **flex balance**.
 
-No build step, no dependencies, no cloud. Everything is stored in your browser's `localStorage`.
+Self-hosted on your LAN. Frontend is plain HTML/CSS/vanilla JS, backend is a small Node.js + Express server that persists to SQLite via Node's built-in `node:sqlite` (no native build deps).
 
-## Run it
+## Architecture
 
-Open `index.html` directly in a modern browser (Chrome, Edge, Firefox, Safari). Double-clicking the file is enough. Bookmark it for quick daily access.
+```
+public/                # Static UI served as-is
+  index.html
+  styles.css
+  js/
+    calc.js            # pure time math
+    storage.js         # talks to /api/* (debounced + coalesced)
+    ui.js              # DOM helpers, toasts, charts
+    app.js             # router, state, event wiring
+server/
+  server.js            # Express app: serves /public + /api/*
+  db.js                # node:sqlite store (one row per day + a settings blob)
+  package.json         # only dep: express
+deploy/
+  install.sh           # one-shot installer for a fresh Debian/Ubuntu LXC
+  uninstall.sh
+  timetracker.service  # systemd unit
+```
 
-If you'd rather serve it locally (optional):
+The data lives in a single SQLite file (`/var/lib/timetracker/timetracker.db` once installed). All writes are scoped to the day or the settings document that changed, so a clock-in is one tiny `PUT /api/days/<date>`.
+
+## Run it locally (dev)
+
+Requires Node.js **>= 22.5** (>= 24 recommended for stable `node:sqlite`).
 
 ```bash
-# Python 3
-python -m http.server 8080
-# then visit http://localhost:8080
+cd server
+npm install
+npm start            # http://localhost:8787
+# or for auto-reload:
+npm run dev
 ```
+
+Then open <http://localhost:8787> in any modern browser.
+
+Optional environment overrides:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` | `8787` | TCP port to listen on |
+| `HOST` | `0.0.0.0` | Bind address |
+| `DATA_DIR` | `server/data` | Where `timetracker.db` lives |
+| `PUBLIC_DIR` | `../public` | Static asset directory |
+
+## Host it on a Proxmox LXC
+
+1. Create an unprivileged LXC (Debian 12 or Ubuntu 22.04+ template, 1 vCPU, 256 MB RAM, 1 GB disk is plenty).
+2. Inside the LXC, get the code (clone via git, `scp`, or `pct push`).
+3. Run the installer as root:
+   ```bash
+   sudo bash deploy/install.sh
+   ```
+   It installs Node 24 LTS, creates the `timetracker` system user, copies the app to `/opt/timetracker`, places the SQLite DB under `/var/lib/timetracker`, installs the systemd unit, and starts the service on port **8787**.
+4. Browse to `http://<lxc-ip>:8787` from anywhere on your LAN.
+
+Useful commands on the LXC:
+
+```bash
+systemctl status  timetracker
+systemctl restart timetracker
+journalctl -u    timetracker -f
+sudo bash deploy/uninstall.sh           # keeps data
+sudo bash deploy/uninstall.sh --purge   # removes data + user too
+```
+
+To upgrade after pulling new code, just re-run `sudo bash deploy/install.sh` — it's idempotent and restarts the service.
+
+## REST API
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `GET` | `/api/health` | — | `{ ok, now }` |
+| `GET` | `/api/state` | — | full `{ version, settings, days }` |
+| `PUT` | `/api/state` | full state | replaces everything (used by Import JSON) |
+| `PUT` | `/api/settings` | settings object | merged + persisted settings |
+| `PUT` | `/api/days/:date` | `{ entries, note }` | the saved day, or 204 if it became empty |
+| `DELETE` | `/api/days/:date` | — | 204 |
+| `POST` | `/api/reset` | — | empty default state |
+
+`:date` must be `YYYY-MM-DD`.
 
 ## Keyboard shortcuts
 
-- `I` - Clock in
-- `O` - Clock out
-- `L` - Start/end lunch (depending on current state)
-- `1` / `2` / `3` / `4` - Switch to Dashboard / Diary / Summary / Settings
+- `I` – Clock in
+- `O` – Clock out
+- `L` – Start/end lunch (depending on current state)
+- `1` / `2` / `3` / `4` – Switch to Dashboard / Diary / Summary / Settings
 
 ## Features
 
@@ -30,45 +101,49 @@ python -m http.server 8080
 - Per-day calculation of worked, regular, extra, lunch, and shortfall hours.
 - Weekly allocation: overtime is filled up to the configured weekly target; the rest flows into flex.
 - Overtime period tracking with per-week progress bars and total filled vs required.
-- All-time flex balance (positive surplus or negative deficit).
+- All-time flex balance (positive surplus or negative deficit), with a configurable opening balance.
 - Weekly and monthly summaries with inline bar charts.
-- JSON backup/restore and CSV export.
+- JSON backup/restore and CSV export (downloaded to your browser).
 - Overlap and validation errors are highlighted in the Diary view.
 - Alerts for past days with an unfinished clock-out.
 - Dark and light themes follow your OS preference.
 
 ## How overtime & flex are computed
 
-1. For each day: `worked = sum(work segments)`, lunch is never counted. `regular = min(worked, dailyHours)`, `extra = max(0, worked - dailyHours)`, `shortfall = max(0, dailyHours - worked)`.
-2. For each week (starts on the configured day):
+1. Per day: `worked = sum(work segments)`, lunch is never counted. `regular = min(worked, dailyHours)`, `extra = max(0, worked - dailyHours)`, `shortfall = max(0, dailyHours - worked)`.
+2. Per week (starts on the configured day):
    - If the week falls inside the configured overtime period, days are walked in order and `extra` hours fill the weekly overtime target first. Anything beyond the target becomes `flex gain`.
    - Outside the period, all `extra` goes straight to flex.
    - `flex net = flex gain - shortfall`.
-3. The all-time **flex balance** is the sum of `flex net` across every week that has recorded data.
+3. The all-time **flex balance** is the configured opening balance plus the sum of `flex net` across every week with recorded data.
 
 ## Settings
 
-All of the following are configurable in the Settings view:
+Configurable in the Settings view:
 
 | Setting | Purpose |
 |---|---|
-| Week starts on | Mon / Sun / Sat - affects week grouping everywhere |
+| Week starts on | Mon / Sun / Sat — affects week grouping everywhere |
 | Regular hours per day | Threshold above which hours become "extra" |
 | Weekly overtime target | How many extra hours per week count as ordered overtime before overflowing to flex |
 | Overtime period start | First day of the ordered-overtime period |
 | Overtime period length | Number of weeks the overtime order applies |
 | Default lunch | Informational default (currently used as a reference only) |
+| Opening flex balance | Starting flex (hours) added on top of computed weeks |
+| Opening flex as of | Optional cutoff date — weeks up to this date are not double-counted |
 
-## Data & backups
+## Backups
 
-All data lives in a single `localStorage` key named `timetracker.v1`.
+The whole dataset is one SQLite file: `/var/lib/timetracker/timetracker.db`.
 
-- **Export JSON backup** - full snapshot (recommended before any risky action).
-- **Export CSV** - one row per day with all computed fields, suitable for Excel.
-- **Import JSON** - replaces all data after confirmation.
-- **Reset all data** - wipes `localStorage` for the app.
+- **Export JSON backup** – downloads a portable JSON snapshot from the Settings view (recommended before any risky action).
+- **Export CSV** – one row per day with all computed fields, suitable for Excel.
+- **Import JSON** – replaces all data after confirmation (calls `PUT /api/state`).
+- **Reset all data** – wipes the database (calls `POST /api/reset`).
 
-The JSON shape:
+For automated backups, just snapshot the SQLite file (e.g. nightly `cp /var/lib/timetracker/timetracker.db /backups/timetracker-$(date +%F).db`) — SQLite WAL mode means a plain copy of the `.db` is consistent enough for a single-user app, but `sqlite3 file.db ".backup /path/file.db"` is safer.
+
+## JSON shape
 
 ```json
 {
@@ -85,15 +160,4 @@ The JSON shape:
     }
   }
 }
-```
-
-## File layout
-
-```
-index.html       Tab shell and view templates
-styles.css       Styling, dark + light
-js/calc.js       Pure time-math (no DOM)
-js/storage.js    localStorage + JSON/CSV I/O
-js/ui.js         DOM helpers, toasts, charts
-js/app.js        Router, state, event wiring
 ```

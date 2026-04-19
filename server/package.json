@@ -1,0 +1,17 @@
+{
+  "name": "timetracker-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Backend for the Time Tracker app: serves static UI and persists data in SQLite (node:sqlite).",
+  "main": "server.js",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0"
+  }
+}

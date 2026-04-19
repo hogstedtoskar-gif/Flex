@@ -1,0 +1,39 @@
+[Unit]
+Description=Time Tracker (self-hosted time/overtime/flex tracker)
+Documentation=https://github.com/your/repo
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=timetracker
+Group=timetracker
+WorkingDirectory=/opt/timetracker
+Environment=NODE_ENV=production
+Environment=PORT=8787
+Environment=HOST=0.0.0.0
+Environment=DATA_DIR=/var/lib/timetracker
+Environment=PUBLIC_DIR=/opt/timetracker/public
+# --no-warnings hides the "SQLite is experimental" notice from node:sqlite.
+ExecStart=/usr/bin/node --no-warnings=ExperimentalWarning /opt/timetracker/server/server.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=timetracker
+
+# Hardening (LXC-friendly subset).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/timetracker
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

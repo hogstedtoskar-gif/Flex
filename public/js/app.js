@@ -1,19 +1,35 @@
-/* app.js - View router, state, event wiring. */
+/* app.js - View router, state, event wiring.
+ *
+ * The state lives in App.state. Every mutation is mirrored to the server
+ * via Storage.* helpers (which debounce + coalesce HTTP writes).
+ */
 
 (() => {
   const App = {
-    state: Storage.load(),
+    state: Storage.emptyState(),
     currentView: 'dashboard',
     diaryDate: Calc.toDateKey(new Date()),
     weekPickerDate: Calc.toDateKey(new Date()),
     monthPicker: (() => {
       const d = new Date();
       return d.getFullYear() + '-' + Calc.pad(d.getMonth() + 1);
-    })()
+    })(),
+    ready: false
   };
 
-  function persist() {
-    Storage.save(App.state);
+  /* =========================================================
+     Persistence helpers — keep server in sync with App.state.
+     The Storage layer debounces, so calling these in a tight
+     loop is safe.
+     ========================================================= */
+  function persistDay(key) {
+    const d = App.state.days[key];
+    if (d) Storage.saveDay(key, d);
+    else Storage.deleteDay(key);
+  }
+
+  function persistSettings() {
+    Storage.saveSettings(App.state.settings);
   }
 
   function ensureDay(key) {
@@ -42,6 +58,10 @@
   function render() {
     const root = document.getElementById('view-root');
     UI.clear(root);
+    if (!App.ready) {
+      root.appendChild(UI.el('div', { class: 'card', text: 'Connecting to server…' }));
+      return;
+    }
     if (App.currentView === 'dashboard') renderDashboard(root);
     else if (App.currentView === 'diary') renderDiary(root);
     else if (App.currentView === 'summary') renderSummary(root);
@@ -63,7 +83,6 @@
 
     view.querySelector('[data-today-date]').textContent = UI.formatDate(today);
 
-    // Status row
     const statusEl = view.querySelector('[data-status]');
     statusEl.classList.add('status-' + status.state);
     let statusText = 'Not clocked in';
@@ -80,28 +99,21 @@
       text: status.state === 'off' ? '—' : 'Now: ' + nowHM()
     }));
 
-    // Action buttons
     const btnIn = view.querySelector('[data-action="clock-in"]');
     const btnOut = view.querySelector('[data-action="clock-out"]');
     const btnLunchStart = view.querySelector('[data-action="lunch-start"]');
     const btnLunchEnd = view.querySelector('[data-action="lunch-end"]');
 
-    const canClockIn = status.state === 'off';
-    const canClockOut = status.state === 'working';
-    const canLunchStart = status.state === 'working';
-    const canLunchEnd = status.state === 'lunch';
-
-    btnIn.disabled = !canClockIn;
-    btnOut.disabled = !canClockOut;
-    btnLunchStart.disabled = !canLunchStart;
-    btnLunchEnd.disabled = !canLunchEnd;
+    btnIn.disabled = !(status.state === 'off');
+    btnOut.disabled = !(status.state === 'working');
+    btnLunchStart.disabled = !(status.state === 'working');
+    btnLunchEnd.disabled = !(status.state === 'lunch');
 
     btnIn.addEventListener('click', () => clockIn(todayKey));
     btnOut.addEventListener('click', () => clockOut(todayKey));
     btnLunchStart.addEventListener('click', () => lunchStart(todayKey));
     btnLunchEnd.addEventListener('click', () => lunchEnd(todayKey));
 
-    // Today totals
     const c = Calc.computeDay(day, settings);
     const todayTotals = view.querySelector('[data-today-totals]');
     todayTotals.appendChild(UI.stat('Worked', Calc.formatHours(c.workedHours)));
@@ -109,7 +121,6 @@
     todayTotals.appendChild(UI.stat('Extra', Calc.formatHours(c.extra), c.extra > 0 ? 'overtime' : ''));
     todayTotals.appendChild(UI.stat('Lunch', Calc.formatHours(c.lunchHours)));
 
-    // Week
     const wsDate = Calc.weekStart(today, settings.weekStartDay);
     const week = Calc.computeWeek(wsDate, App.state.days, settings);
     view.querySelector('[data-week-range]').textContent = UI.formatRange(week.weekStart, week.weekEnd);
@@ -144,7 +155,6 @@
       'regular'
     ));
 
-    // Overtime period
     const period = Calc.computeOvertimePeriod(App.state.days, settings);
     const periodRange = view.querySelector('[data-period-range]');
     if (settings.overtimePeriodStart && settings.overtimePeriodWeeks > 0) {
@@ -177,7 +187,6 @@
       periodWeeksEl.appendChild(UI.progressBar(label, w.filled, w.target));
     }
 
-    // Flex balance
     const flexBalance = Calc.computeFlexBalance(App.state.days, settings);
     const opening = parseFloat(settings.flexOpeningBalance) || 0;
     const earned = flexBalance - opening;
@@ -200,10 +209,8 @@
       }));
     }
 
-    // Manual entry form
     setupManualEntry(view);
 
-    // Alerts
     const alerts = view.querySelector('[data-alerts]');
     const unfinished = findUnfinishedDays();
     for (const { dateKey } of unfinished) {
@@ -233,7 +240,7 @@
       start: nowHM(),
       end: ''
     });
-    persist();
+    persistDay(dateKey);
     UI.toast('Clocked in', 'success');
     render();
   }
@@ -246,7 +253,7 @@
       return;
     }
     status.openEntry.end = nowHM();
-    persist();
+    persistDay(dateKey);
     UI.toast('Clocked out', 'success');
     render();
   }
@@ -266,7 +273,7 @@
       start: now,
       end: ''
     });
-    persist();
+    persistDay(dateKey);
     UI.toast('Lunch started', 'info');
     render();
   }
@@ -286,7 +293,7 @@
       start: now,
       end: ''
     });
-    persist();
+    persistDay(dateKey);
     UI.toast('Back to work', 'success');
     render();
   }
@@ -354,13 +361,12 @@
         day.entries = (day.entries || []).concat(newSegments);
       }
 
-      // Validate result
       const { errors } = Calc.validateDay(day.entries);
       if (errors.length) {
         errEl.textContent = 'Saved, but the day has issues: ' + errors.map(e => e.message).join('; ');
       }
 
-      persist();
+      persistDay(date);
       UI.toast('Entry saved for ' + date, 'success');
       form.reset();
       form.elements['date'].value = Calc.toDateKey(new Date());
@@ -418,7 +424,6 @@
     summaryEl.appendChild(UI.stat('Extra', Calc.formatHours(c.extra), c.extra > 0 ? 'overtime' : ''));
     summaryEl.appendChild(UI.stat('Lunch', Calc.formatHours(c.lunchHours)));
 
-    // Validation
     const validation = Calc.validateDay(day.entries || []);
     const validationEl = view.querySelector('[data-diary-validation]');
     for (const err of validation.errors) {
@@ -441,7 +446,6 @@
       }));
     }
 
-    // Entries
     const entriesEl = view.querySelector('[data-diary-entries]');
     const errorById = new Map();
     for (const err of validation.errors) {
@@ -464,22 +468,20 @@
       }
     }
 
-    // Add
     view.querySelector('[data-action="add-entry"]').addEventListener('click', () => {
       const d = ensureDay(key);
       d.entries.push({ id: Storage.uuid(), type: 'work', start: '', end: '' });
-      persist();
+      persistDay(key);
       render();
     });
 
-    // Note
     const noteEl = view.querySelector('[data-diary-note]');
     noteEl.value = day.note || '';
     noteEl.addEventListener('change', () => {
       const d = ensureDay(key);
       d.note = noteEl.value;
       pruneDay(key);
-      persist();
+      persistDay(key);
     });
   }
 
@@ -517,9 +519,7 @@
     row.appendChild(durEl);
     row.appendChild(actions);
 
-    if (errorMsg) {
-      row.title = errorMsg;
-    }
+    if (errorMsg) row.title = errorMsg;
     return row;
   }
 
@@ -528,7 +528,7 @@
     const e = (day.entries || []).find(x => x.id === entryId);
     if (!e) return;
     Object.assign(e, patch);
-    persist();
+    persistDay(dateKey);
     render();
   }
 
@@ -537,7 +537,7 @@
     if (!day) return;
     day.entries = (day.entries || []).filter(x => x.id !== entryId);
     pruneDay(dateKey);
-    persist();
+    persistDay(dateKey);
     render();
   }
 
@@ -556,7 +556,6 @@
 
     const settings = App.state.settings;
 
-    // Week controls
     const weekPicker = view.querySelector('[data-week-picker]');
     weekPicker.value = Calc.isoWeekString(Calc.parseDateKey(App.weekPickerDate));
     weekPicker.addEventListener('change', () => {
@@ -583,7 +582,6 @@
     const weekTableContainer = view.querySelector('[data-week-table]');
     weekTableContainer.appendChild(renderWeekTable(week));
 
-    // Month controls
     const monthPicker = view.querySelector('[data-month-picker]');
     monthPicker.value = App.monthPicker;
     monthPicker.addEventListener('change', () => {
@@ -731,7 +729,7 @@
         flexOpeningBalance: parseFloat(f['flexOpeningBalance'].value) || 0,
         flexOpeningDate: f['flexOpeningDate'].value || ''
       };
-      persist();
+      persistSettings();
       UI.toast('Settings saved', 'success');
       render();
     });
@@ -755,9 +753,8 @@
       }
       try {
         const text = await file.text();
-        const parsed = Storage.importJson(text);
+        const parsed = await Storage.importJson(text);
         App.state = parsed;
-        persist();
         UI.toast('Imported ' + Object.keys(parsed.days).length + ' days', 'success');
         render();
       } catch (err) {
@@ -767,12 +764,16 @@
       }
     });
 
-    view.querySelector('[data-action="reset-all"]').addEventListener('click', () => {
+    view.querySelector('[data-action="reset-all"]').addEventListener('click', async () => {
       if (!UI.confirmDialog('Delete ALL time-tracking data? This cannot be undone.')) return;
-      Storage.reset();
-      App.state = Storage.emptyState();
-      UI.toast('All data reset', 'info');
-      render();
+      try {
+        await Storage.reset();
+        App.state = Storage.emptyState();
+        UI.toast('All data reset', 'info');
+        render();
+      } catch (err) {
+        UI.toast('Reset failed: ' + err.message, 'error');
+      }
     });
   }
 
@@ -789,6 +790,7 @@
     document.addEventListener('keydown', (ev) => {
       if (ev.target && /^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName)) return;
       if (ev.altKey || ev.ctrlKey || ev.metaKey) return;
+      if (!App.ready) return;
       const todayKey = Calc.toDateKey(new Date());
       const k = ev.key.toLowerCase();
       if (k === 'i') { clockIn(todayKey); }
@@ -816,11 +818,37 @@
     setInterval(tick, 1000);
   }
 
-  function init() {
+  function setupBeforeUnloadFlush() {
+    // Best-effort: flush any pending writes when the user closes the tab.
+    window.addEventListener('beforeunload', () => {
+      try { Storage.flushNow(); } catch (_) { /* ignore */ }
+    });
+  }
+
+  Storage.setErrorHandler((err) => {
+    UI.toast('Save failed: ' + err.message, 'error');
+  });
+
+  async function init() {
     setupTabs();
     setupHotkeys();
     setupLiveClock();
+    setupBeforeUnloadFlush();
     setView('dashboard');
+
+    try {
+      App.state = await Storage.load();
+      App.ready = true;
+      render();
+    } catch (err) {
+      const root = document.getElementById('view-root');
+      UI.clear(root);
+      root.appendChild(UI.el('div', {
+        class: 'card alert alert-danger',
+        text: 'Could not load data from server: ' + err.message
+          + ' — make sure the backend is running.'
+      }));
+    }
   }
 
   if (document.readyState === 'loading') {
