@@ -3,7 +3,7 @@
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: hogst
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source:  https://github.com/hogst/St-mpling
+# Source:  https://github.com/hogstedtoskar-gif/St-mpling
 #
 # This script installs the Time Tracker inside an already-created LXC.
 # It can be invoked two ways:
@@ -27,8 +27,8 @@ setting_up_container
 network_check
 update_os
 
-REPO_URL="${REPO_URL:-https://github.com/hogst/St-mpling.git}"
-REPO_BRANCH="${REPO_BRANCH:-main}"
+REPO_URL="${REPO_URL:-https://github.com/hogstedtoskar-gif/St-mpling.git}"
+REPO_BRANCH="${REPO_BRANCH:-Server}"
 APP_USER="timetracker"
 APP_DIR="/opt/timetracker"
 DATA_DIR="/var/lib/timetracker"

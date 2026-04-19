@@ -3,13 +3,13 @@ source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxV
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: hogst
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source:  https://github.com/hogst/St-mpling
+# Source:  https://github.com/hogstedtoskar-gif/St-mpling
 #
 # Time Tracker — self-hosted time / overtime / flex tracker.
 # Node.js + Express + node:sqlite (no native build deps). Runs on port 8787.
 #
 # Usage (on the Proxmox host, as root):
-#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/hogst/St-mpling/main/deploy/ct/timetracker.sh)"
+#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/hogstedtoskar-gif/St-mpling/Server/deploy/ct/timetracker.sh)"
 #
 # This script uses community-scripts' build.func for the interactive container
 # creation wizard and base OS setup. Because the install script for this
@@ -28,9 +28,9 @@ var_version="${var_version:-13}"
 var_unprivileged="${var_unprivileged:-1}"
 
 # Where our install script lives. Override via env if you forked the repo.
-TT_REPO_URL="${TT_REPO_URL:-https://github.com/hogst/St-mpling.git}"
-TT_REPO_BRANCH="${TT_REPO_BRANCH:-main}"
-TT_INSTALL_URL="${TT_INSTALL_URL:-https://raw.githubusercontent.com/hogst/St-mpling/${TT_REPO_BRANCH}/deploy/install/timetracker-install.sh}"
+TT_REPO_URL="${TT_REPO_URL:-https://github.com/hogstedtoskar-gif/St-mpling.git}"
+TT_REPO_BRANCH="${TT_REPO_BRANCH:-Server}"
+TT_INSTALL_URL="${TT_INSTALL_URL:-https://raw.githubusercontent.com/hogstedtoskar-gif/St-mpling/${TT_REPO_BRANCH}/deploy/install/timetracker-install.sh}"
 
 header_info "$APP"
 variables

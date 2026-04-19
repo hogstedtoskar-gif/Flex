@@ -65,7 +65,7 @@ Requires the repo to be reachable on GitHub (or another raw-git host).
 On your Proxmox host, as **root**:
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/hogst/St-mpling/main/deploy/ct/timetracker.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/hogstedtoskar-gif/St-mpling/Server/deploy/ct/timetracker.sh)"
 ```
 
 Override defaults via env vars before the command, e.g. `var_ram=1024 var_disk=4 bash -c "$(curl …)"`. If you forked the repo, set `TT_REPO_URL=https://github.com/you/your-fork.git`.
