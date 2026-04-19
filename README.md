@@ -20,9 +20,11 @@ server/
   db.js                # node:sqlite store (one row per day + a settings blob)
   package.json         # only dep: express
 deploy/
-  install.sh           # one-shot installer for a fresh Debian/Ubuntu LXC
+  ct/timetracker.sh                # Proxmox-host one-liner (community-scripts style)
+  install/timetracker-install.sh   # in-container installer (community-scripts style)
+  install.sh                       # manual installer for an existing LXC
   uninstall.sh
-  timetracker.service  # systemd unit
+  timetracker.service              # systemd unit
 ```
 
 The data lives in a single SQLite file (`/var/lib/timetracker/timetracker.db` once installed). All writes are scoped to the day or the settings document that changed, so a clock-in is one tiny `PUT /api/days/<date>`.
@@ -52,13 +54,35 @@ Optional environment overrides:
 
 ## Host it on a Proxmox LXC
 
-1. Create an unprivileged LXC (Debian 12 or Ubuntu 22.04+ template, 1 vCPU, 256 MB RAM, 1 GB disk is plenty).
-2. Inside the LXC, get the code (clone via git, `scp`, or `pct push`).
+You get two paths. Pick whichever fits how you like to work.
+
+### A) One-liner on the Proxmox host (community-scripts style)
+
+Uses [community-scripts](https://community-scripts.org/docs) `build.func` for the interactive container-creation wizard (storage, network, resources, etc.), then runs our installer inside the new LXC.
+
+Requires the repo to be reachable on GitHub (or another raw-git host).
+
+On your Proxmox host, as **root**:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/hogst/St-mpling/main/deploy/ct/timetracker.sh)"
+```
+
+Override defaults via env vars before the command, e.g. `var_ram=1024 var_disk=4 bash -c "$(curl …)"`. If you forked the repo, set `TT_REPO_URL=https://github.com/you/your-fork.git`.
+
+The script creates an unprivileged Debian 13 LXC (1 vCPU, 512 MB, 2 GB disk by default), installs Node 24, clones this repo to `/opt/timetracker`, puts the DB at `/var/lib/timetracker`, enables the systemd unit, and prints the access URL.
+
+### B) Manual install inside an existing LXC
+
+If you'd rather create the LXC yourself in the Proxmox UI:
+
+1. Create an unprivileged LXC (Debian 12/13 or Ubuntu 22+ template, 1 vCPU, 256 MB RAM, 1 GB disk).
+2. Get the code inside (`git clone`, `scp`, or `pct push`).
 3. Run the installer as root:
    ```bash
    sudo bash deploy/install.sh
    ```
-   It installs Node 24 LTS, creates the `timetracker` system user, copies the app to `/opt/timetracker`, places the SQLite DB under `/var/lib/timetracker`, installs the systemd unit, and starts the service on port **8787**.
+   Same end state as path A.
 4. Browse to `http://<lxc-ip>:8787` from anywhere on your LAN.
 
 Useful commands on the LXC:
