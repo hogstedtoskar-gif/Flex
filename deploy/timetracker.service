@@ -33,7 +33,9 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 LockPersonality=true
-MemoryDenyWriteExecute=true
+# NOTE: MemoryDenyWriteExecute is intentionally OFF — V8 (Node's JS engine)
+# needs W+X memory pages for JIT compilation and will crash on startup with
+# "Check failed: 12 == errno" otherwise.
 
 [Install]
 WantedBy=multi-user.target

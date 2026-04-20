@@ -101,7 +101,7 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 LockPersonality=true
-MemoryDenyWriteExecute=true
+# MemoryDenyWriteExecute intentionally OFF — V8 needs W+X for JIT.
 
 [Install]
 WantedBy=multi-user.target
