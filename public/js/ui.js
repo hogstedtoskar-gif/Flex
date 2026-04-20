@@ -118,6 +118,101 @@ const UI = (() => {
     return formatDateShort(a) + ' – ' + formatDateShort(b);
   }
 
+  // --- 24h time input ----------------------------------------------------
+  // Native <input type="time"> follows the OS locale in Chromium, so it
+  // can force AM/PM on en-US machines regardless of the page's lang. To
+  // guarantee 24h across every browser/OS we use a text input with a
+  // digit mask and coerce the value to strict HH:MM on blur.
+
+  const TIME24_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+  // Loosely normalise "H:MM" / "HHMM" / "H.MM" etc. into "HH:MM" (24h).
+  // Returns '' when the input can't be coerced.
+  function normaliseTime24(raw) {
+    if (raw == null) return '';
+    let s = String(raw).trim();
+    if (!s) return '';
+    // Accept "HHMM" without a separator.
+    if (/^\d{3,4}$/.test(s)) {
+      s = s.length === 3
+        ? s.slice(0, 1) + ':' + s.slice(1)
+        : s.slice(0, 2) + ':' + s.slice(2);
+    }
+    // Accept "." or space as separator.
+    s = s.replace(/[.\s]/g, ':');
+    const m = s.match(/^(\d{1,2}):(\d{1,2})$/);
+    if (!m) return '';
+    const h = parseInt(m[1], 10);
+    const min = parseInt(m[2], 10);
+    if (Number.isNaN(h) || Number.isNaN(min)) return '';
+    if (h < 0 || h > 23 || min < 0 || min > 59) return '';
+    const pad = (n) => (n < 10 ? '0' + n : '' + n);
+    return pad(h) + ':' + pad(min);
+  }
+
+  // Wire a single text input for 24h entry. Safe to call multiple times
+  // on the same node — it tags itself and no-ops on the second pass.
+  function wireTime24(input) {
+    if (!input || input.dataset.time24Wired === '1') return;
+    input.dataset.time24Wired = '1';
+
+    input.type = 'text';
+    input.setAttribute('inputmode', 'numeric');
+    input.setAttribute('autocomplete', 'off');
+    input.setAttribute('maxlength', '5');
+    input.setAttribute('placeholder', input.getAttribute('placeholder') || 'HH:MM');
+    // Purely advisory — the real check is in JS:
+    input.setAttribute('pattern', '^([01]\\d|2[0-3]):[0-5]\\d$');
+    input.classList.add('time24');
+
+    // Live mask: only digits and a single colon, auto-insert after 2 digits.
+    input.addEventListener('input', () => {
+      let v = input.value.replace(/[^\d:]/g, '');
+      const firstColon = v.indexOf(':');
+      if (firstColon !== -1) {
+        v = v.slice(0, firstColon + 1) + v.slice(firstColon + 1).replace(/:/g, '');
+      }
+      if (firstColon === -1 && v.length >= 3) {
+        v = v.slice(0, 2) + ':' + v.slice(2);
+      }
+      if (v.length > 5) v = v.slice(0, 5);
+      if (v !== input.value) input.value = v;
+      input.classList.toggle('invalid', v !== '' && !TIME24_RE.test(v));
+    });
+
+    // Coerce to canonical HH:MM on blur so downstream code always sees
+    // a well-formed value (or '' if the user typed nonsense).
+    input.addEventListener('blur', () => {
+      const canon = normaliseTime24(input.value);
+      if (canon !== input.value) {
+        input.value = canon;
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      input.classList.toggle('invalid', input.value !== '' && !TIME24_RE.test(input.value));
+    });
+  }
+
+  // Upgrade every .time24 input inside `root` (defaults to document).
+  function upgradeTime24Inputs(root) {
+    const scope = root || document;
+    scope.querySelectorAll('input.time24, input[data-time24]').forEach(wireTime24);
+  }
+
+  // Build a fresh 24h time input and return it. `onChange` fires with the
+  // *canonical* value (possibly '') whenever the field produces a change event.
+  function time24Input(value, onChange, extraAttrs) {
+    const attrs = Object.assign(
+      { type: 'text', class: 'time24', value: value || '' },
+      extraAttrs || {}
+    );
+    const node = el('input', attrs);
+    wireTime24(node);
+    if (typeof onChange === 'function') {
+      node.addEventListener('change', () => onChange(node.value));
+    }
+    return node;
+  }
+
   return {
     el,
     clear,
@@ -130,6 +225,9 @@ const UI = (() => {
     confirmDialog,
     formatDate,
     formatDateShort,
-    formatRange
+    formatRange,
+    time24Input,
+    upgradeTime24Inputs,
+    normaliseTime24
   };
 })();

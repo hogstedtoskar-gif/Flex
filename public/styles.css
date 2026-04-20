@@ -453,7 +453,8 @@ html, body {
 .entry-row.invalid { border-color: var(--danger); }
 
 .entry-row select,
-.entry-row input[type="time"] {
+.entry-row input[type="time"],
+.entry-row input.time24 {
   background: var(--bg-card);
   color: var(--text);
   border: 1px solid var(--border-strong);
@@ -462,6 +463,16 @@ html, body {
   font-family: inherit;
   font-size: 13px;
   color-scheme: dark light;
+}
+
+input.time24 {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+input.time24.invalid {
+  border-color: var(--danger);
+  outline: none;
 }
 
 .entry-duration {

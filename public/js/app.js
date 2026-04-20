@@ -303,6 +303,7 @@
     const errEl = view.querySelector('[data-manual-error]');
     if (!form) return;
 
+    UI.upgradeTime24Inputs(form);
     form.elements['date'].value = Calc.toDateKey(new Date());
 
     form.addEventListener('submit', (ev) => {
@@ -311,10 +312,16 @@
 
       const f = form.elements;
       const date = f['date'].value;
-      const clockIn = f['clockIn'].value;
-      const clockOut = f['clockOut'].value;
-      const lunchStart = f['lunchStart'].value;
-      const lunchEnd = f['lunchEnd'].value;
+      // Coerce to canonical HH:MM (handles Enter-to-submit where blur
+      // hasn't fired yet, and "9:5" / "0905" style typing).
+      const clockIn = UI.normaliseTime24(f['clockIn'].value);
+      const clockOut = UI.normaliseTime24(f['clockOut'].value);
+      const lunchStart = UI.normaliseTime24(f['lunchStart'].value);
+      const lunchEnd = UI.normaliseTime24(f['lunchEnd'].value);
+      f['clockIn'].value = clockIn;
+      f['clockOut'].value = clockOut;
+      f['lunchStart'].value = lunchStart;
+      f['lunchEnd'].value = lunchEnd;
       const mode = f['mode'].value;
 
       if (!date || !clockIn || !clockOut) {
@@ -496,11 +503,8 @@
     }
     typeSel.addEventListener('change', () => updateEntry(dateKey, entry.id, { type: typeSel.value }));
 
-    const startInput = UI.el('input', { type: 'time', value: entry.start || '' });
-    startInput.addEventListener('change', () => updateEntry(dateKey, entry.id, { start: startInput.value }));
-
-    const endInput = UI.el('input', { type: 'time', value: entry.end || '' });
-    endInput.addEventListener('change', () => updateEntry(dateKey, entry.id, { end: endInput.value }));
+    const startInput = UI.time24Input(entry.start || '', (v) => updateEntry(dateKey, entry.id, { start: v }));
+    const endInput = UI.time24Input(entry.end || '', (v) => updateEntry(dateKey, entry.id, { end: v }));
 
     const minutes = Calc.entryMinutes(entry);
     const durText = (entry.start && entry.end)
