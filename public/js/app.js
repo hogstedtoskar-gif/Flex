@@ -238,6 +238,11 @@
     todayTotals.appendChild(UI.stat('Worked', Calc.formatHours(c.workedHours)));
     todayTotals.appendChild(UI.stat('Regular', Calc.formatHours(c.regular)));
     todayTotals.appendChild(UI.stat('Extra', Calc.formatHours(c.extra), c.extra > 0 ? 'overtime' : ''));
+    if (c.officeEnforced && c.outsideHours > 0) {
+      todayTotals.appendChild(UI.stat(
+        'Outside', Calc.formatHours(c.outsideHours), 'overtime'
+      ));
+    }
     todayTotals.appendChild(UI.stat('Lunch', Calc.formatHours(c.lunchHours)));
 
     const wsDate = Calc.weekStart(today, settings.weekStartDay);
@@ -253,6 +258,13 @@
       Calc.formatHours(week.flexNet),
       week.flexNet > 0 ? 'positive' : (week.flexNet < 0 ? 'negative' : '')
     ));
+    if (week.outsideUnused > 0) {
+      weekTotals.appendChild(UI.stat(
+        'Outside unused',
+        Calc.formatHours(week.outsideUnused),
+        'negative'
+      ));
+    }
 
     const weekProgress = view.querySelector('[data-week-progress]');
     if (week.inPeriod) {
@@ -548,6 +560,11 @@
     summaryEl.appendChild(UI.stat('Worked', Calc.formatHours(c.workedHours)));
     summaryEl.appendChild(UI.stat('Regular', Calc.formatHours(c.regular)));
     summaryEl.appendChild(UI.stat('Extra', Calc.formatHours(c.extra), c.extra > 0 ? 'overtime' : ''));
+    if (c.officeEnforced && c.outsideHours > 0) {
+      summaryEl.appendChild(UI.stat(
+        'Outside', Calc.formatHours(c.outsideHours), 'overtime'
+      ));
+    }
     summaryEl.appendChild(UI.stat('Lunch', Calc.formatHours(c.lunchHours)));
 
     const validation = Calc.validateDay(day.entries || []);
@@ -569,6 +586,15 @@
       validationEl.appendChild(UI.el('div', {
         class: 'alert alert-warning',
         text: 'This past day still has an open segment without an end time.'
+      }));
+    }
+    if (c.officeEnforced && c.outsideHours > 0) {
+      validationEl.appendChild(UI.el('div', {
+        class: 'alert alert-info',
+        text: 'Outside office hours (' + (settings.officeStart || '') + '–'
+          + (settings.officeEnd || '') + '): '
+          + Calc.formatHours(c.outsideHours, { compact: true })
+          + ' — counts toward overtime only, never regular or flex.'
       }));
     }
 
@@ -747,7 +773,7 @@
     const table = UI.el('table', { class: 'data-table' });
     const thead = UI.el('thead');
     thead.appendChild(rowEl('th', [
-      'Day', 'Date', 'Worked', 'Regular', 'Overtime', 'Flex gain', 'Shortfall'
+      'Day', 'Date', 'Worked', 'Regular', 'Outside', 'Overtime', 'Flex gain', 'Shortfall'
     ]));
     table.appendChild(thead);
 
@@ -760,6 +786,7 @@
         d.dateKey,
         Calc.formatHours(c.workedHours, { compact: true }),
         Calc.formatHours(c.regular, { compact: true }),
+        c.outsideHours > 0 ? Calc.formatHours(c.outsideHours, { compact: true }) : '—',
         Calc.formatHours(d.overtimeHours, { compact: true }),
         Calc.formatHours(d.flexGainHours, { compact: true }),
         c.shortfall > 0 ? Calc.formatHours(c.shortfall, { compact: true }) : '—'
@@ -772,6 +799,7 @@
       'Total', '',
       Calc.formatHours(week.workedTotal, { compact: true }),
       Calc.formatHours(week.regularTotal, { compact: true }),
+      Calc.formatHours(week.outsideTotal || 0, { compact: true }),
       Calc.formatHours(week.overtimeFilled, { compact: true }),
       Calc.formatHours(week.flexGain, { compact: true }),
       Calc.formatHours(week.shortfall, { compact: true })
@@ -832,6 +860,8 @@
 
     form.elements['weekStartDay'].value = String(s.weekStartDay);
     form.elements['regularHoursPerDay'].value = s.regularHoursPerDay;
+    form.elements['officeStart'].value = s.officeStart || '';
+    form.elements['officeEnd'].value = s.officeEnd || '';
     form.elements['weeklyOvertimeTargetHours'].value = s.weeklyOvertimeTargetHours;
     form.elements['overtimePeriodStart'].value = s.overtimePeriodStart || '';
     form.elements['overtimePeriodWeeks'].value = s.overtimePeriodWeeks;
@@ -839,9 +869,16 @@
     form.elements['flexOpeningBalance'].value = s.flexOpeningBalance || 0;
     form.elements['flexOpeningDate'].value = s.flexOpeningDate || '';
 
+    // The office-time inputs use the 24h widget (wireTime24 handles masking).
+    UI.upgradeTime24Inputs(form);
+
     form.addEventListener('submit', (ev) => {
       ev.preventDefault();
       const f = form.elements;
+      const officeStart = UI.normaliseTime24(f['officeStart'].value);
+      const officeEnd = UI.normaliseTime24(f['officeEnd'].value);
+      f['officeStart'].value = officeStart;
+      f['officeEnd'].value = officeEnd;
       App.state.settings = {
         weekStartDay: parseInt(f['weekStartDay'].value, 10),
         regularHoursPerDay: parseFloat(f['regularHoursPerDay'].value) || 0,
@@ -850,7 +887,9 @@
         overtimePeriodWeeks: parseInt(f['overtimePeriodWeeks'].value, 10) || 0,
         defaultLunchMinutes: parseInt(f['defaultLunchMinutes'].value, 10) || 0,
         flexOpeningBalance: parseFloat(f['flexOpeningBalance'].value) || 0,
-        flexOpeningDate: f['flexOpeningDate'].value || ''
+        flexOpeningDate: f['flexOpeningDate'].value || '',
+        officeStart: officeStart,
+        officeEnd: officeEnd
       };
       persistSettings();
       UI.toast('Settings saved', 'success');

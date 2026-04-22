@@ -338,6 +338,7 @@ html, body {
 
 .alert-warning { border-left: 3px solid var(--warning); }
 .alert-danger { border-left: 3px solid var(--danger); }
+.alert-info { border-left: 3px solid var(--primary); }
 
 /* Manual entry form */
 .manual-form {

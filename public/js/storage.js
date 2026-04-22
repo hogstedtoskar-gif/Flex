@@ -17,7 +17,9 @@ const Storage = (() => {
     overtimePeriodWeeks: 4,
     defaultLunchMinutes: 30,
     flexOpeningBalance: 0,
-    flexOpeningDate: ''
+    flexOpeningDate: '',
+    officeStart: '07:30',
+    officeEnd: '17:30'
   };
 
   function emptyState() {
@@ -234,8 +236,10 @@ const Storage = (() => {
     const settings = state.settings;
     const keys = Object.keys(state.days).sort();
     const rows = [[
-      'Date', 'Weekday', 'Worked (h)', 'Regular (h)', 'Extra (h)',
-      'Overtime (h)', 'Flex gain (h)', 'Shortfall (h)', 'Lunch (h)',
+      'Date', 'Weekday', 'Worked (h)', 'In Office (h)', 'Outside (h)',
+      'Regular (h)', 'Extra (h)',
+      'Overtime (h)', 'Flex gain (h)', 'Outside unused (h)',
+      'Shortfall (h)', 'Lunch (h)',
       'In Period', 'Segments', 'Note'
     ]];
 
@@ -254,6 +258,7 @@ const Storage = (() => {
         dayAlloc.set(d.dateKey, {
           overtime: d.overtimeHours,
           flexGain: d.flexGainHours,
+          outsideUnused: d.outsideUnusedHours || 0,
           inPeriod: w.inPeriod
         });
       }
@@ -264,7 +269,7 @@ const Storage = (() => {
       const day = state.days[key];
       const date = Calc.parseDateKey(key);
       const c = Calc.computeDay(day, settings);
-      const alloc = dayAlloc.get(key) || { overtime: 0, flexGain: 0, inPeriod: false };
+      const alloc = dayAlloc.get(key) || { overtime: 0, flexGain: 0, outsideUnused: 0, inPeriod: false };
       const segStr = (day.entries || [])
         .map(e => `${e.type[0].toUpperCase()}:${e.start || '--:--'}-${e.end || '--:--'}`)
         .join(' | ');
@@ -272,10 +277,13 @@ const Storage = (() => {
         key,
         weekdayNames[date.getDay()],
         c.workedHours.toFixed(2),
+        c.inOfficeHours.toFixed(2),
+        c.outsideHours.toFixed(2),
         c.regular.toFixed(2),
         c.extra.toFixed(2),
         alloc.overtime.toFixed(2),
         alloc.flexGain.toFixed(2),
+        alloc.outsideUnused.toFixed(2),
         c.shortfall.toFixed(2),
         c.lunchHours.toFixed(2),
         alloc.inPeriod ? 'yes' : 'no',

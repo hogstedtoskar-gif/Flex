@@ -50,6 +50,44 @@ const Calc = (() => {
   }
 
   /**
+   * Parse the configured office-hours window. Returns null when no
+   * valid window is set, meaning "treat all work as in-office" (the
+   * pre-office-hours behavior, kept for backward compatibility).
+   */
+  function officeWindow(settings) {
+    const s = parseHM(settings && settings.officeStart);
+    const e = parseHM(settings && settings.officeEnd);
+    if (s == null || e == null || e <= s) return null;
+    return { start: s, end: e };
+  }
+
+  /**
+   * Split a work entry into in-office vs outside-office minutes given
+   * a window. Handles overnight wrap by checking today's window and
+   * the next day's window.
+   */
+  function entryOfficeSplit(entry, window) {
+    const total = entryMinutes(entry);
+    if (!window || total === 0) {
+      return { total, inOffice: total, outside: 0 };
+    }
+    const s = parseHM(entry.start);
+    const e = parseHM(entry.end);
+    if (s == null || e == null) return { total, inOffice: 0, outside: 0 };
+    let segStart = s;
+    let segEnd = e;
+    if (segEnd < segStart) segEnd += 24 * 60;
+    let inOffice = 0;
+    for (const offset of [0, 24 * 60]) {
+      const lo = Math.max(segStart, window.start + offset);
+      const hi = Math.min(segEnd, window.end + offset);
+      if (hi > lo) inOffice += hi - lo;
+    }
+    if (inOffice > total) inOffice = total; // numeric safety
+    return { total, inOffice, outside: total - inOffice };
+  }
+
+  /**
    * Validate entries for a single day.
    * Returns { errors: [{ id, message }], warnings: [{ id?, message }] }.
    */
@@ -100,26 +138,59 @@ const Calc = (() => {
 
   /**
    * Compute totals for a single day.
-   * Returns: { workedHours, lunchHours, regular, extra, shortfall, hasOpen }
+   *
+   * When an office window is configured, regular hours and flex can
+   * only be earned inside it; outside-hours work is overtime-eligible
+   * only (and is discarded if the weekly overtime target is already
+   * full — see computeWeek).
+   *
+   * Returns: {
+   *   workedHours, inOfficeHours, outsideHours, lunchHours,
+   *   regular, extra, extraInOffice, extraOutside,
+   *   shortfall, hasOpen, officeEnforced
+   * }
    */
   function computeDay(day, settings) {
     const entries = (day && day.entries) || [];
+    const window = officeWindow(settings);
     let workedMin = 0;
+    let inOfficeMin = 0;
     let lunchMin = 0;
     let hasOpen = false;
     for (const e of entries) {
       if (!e.start) continue;
       if (!e.end) { hasOpen = true; continue; }
-      const m = entryMinutes(e);
-      if (e.type === 'work') workedMin += m;
-      else if (e.type === 'lunch') lunchMin += m;
+      if (e.type === 'work') {
+        const split = entryOfficeSplit(e, window);
+        workedMin += split.total;
+        inOfficeMin += split.inOffice;
+      } else if (e.type === 'lunch') {
+        lunchMin += entryMinutes(e);
+      }
     }
     const workedHours = minutesToHours(workedMin);
+    const inOfficeHours = minutesToHours(inOfficeMin);
+    const outsideHours = Math.max(0, workedHours - inOfficeHours);
     const lunchHours = minutesToHours(lunchMin);
-    const regular = Math.min(workedHours, settings.regularHoursPerDay);
-    const extra = Math.max(0, workedHours - settings.regularHoursPerDay);
-    const shortfall = Math.max(0, settings.regularHoursPerDay - workedHours);
-    return { workedHours, lunchHours, regular, extra, shortfall, hasOpen };
+    const daily = settings.regularHoursPerDay;
+    const regular = Math.min(inOfficeHours, daily);
+    const extraInOffice = Math.max(0, inOfficeHours - daily);
+    const extraOutside = outsideHours;
+    const extra = extraInOffice + extraOutside;
+    const shortfall = Math.max(0, daily - inOfficeHours);
+    return {
+      workedHours,
+      inOfficeHours,
+      outsideHours,
+      lunchHours,
+      regular,
+      extra,
+      extraInOffice,
+      extraOutside,
+      shortfall,
+      hasOpen,
+      officeEnforced: !!window
+    };
   }
 
   /**
@@ -169,8 +240,16 @@ const Calc = (() => {
   }
 
   /**
-   * Compute a full week's allocation. Walks days in order and fills overtime before flex.
-   * Returns per-day allocation + weekly totals.
+   * Compute a full week's allocation. Walks days in order.
+   *
+   * Allocation rules (see README for the long version):
+   *   - Inside the overtime period, outside-office extras fill the
+   *     weekly overtime target FIRST (they cannot become flex, so it's
+   *     use-it-or-lose-it). Then in-office extras fill the remainder.
+   *     Any leftover in-office extras become flex gain. Any leftover
+   *     outside extras are counted as `outsideUnusedHours` (lost).
+   *   - Outside the overtime period, only in-office extras become
+   *     flex; outside extras are always lost.
    */
   function computeWeek(weekStartDate, daysMap, settings) {
     const inPeriod = periodWeekIndex(weekStartDate, settings) !== -1;
@@ -182,6 +261,9 @@ const Calc = (() => {
     let shortfall = 0;
     let regularTotal = 0;
     let workedTotal = 0;
+    let outsideUnusedTotal = 0;
+    let inOfficeTotal = 0;
+    let outsideTotal = 0;
 
     for (let i = 0; i < 7; i++) {
       const d = addDays(weekStartDate, i);
@@ -190,18 +272,33 @@ const Calc = (() => {
       const c = computeDay(day, settings);
       let toOvertime = 0;
       let toFlex = 0;
+      let outsideUnused = 0;
+
       if (inPeriod) {
-        const remaining = Math.max(0, target - overtimeFilled);
-        toOvertime = Math.min(remaining, c.extra);
-        toFlex = c.extra - toOvertime;
+        let remaining = Math.max(0, target - overtimeFilled);
+        // Outside-hours extras: fill overtime first, remainder is lost.
+        const otFromOutside = Math.min(remaining, c.extraOutside);
+        remaining -= otFromOutside;
+        outsideUnused = c.extraOutside - otFromOutside;
+        // In-office extras: fill overtime, remainder becomes flex.
+        const otFromOffice = Math.min(remaining, c.extraInOffice);
+        toOvertime = otFromOutside + otFromOffice;
+        toFlex = c.extraInOffice - otFromOffice;
       } else {
-        toFlex = c.extra;
+        // No overtime bucket active this week.
+        toOvertime = 0;
+        toFlex = c.extraInOffice;
+        outsideUnused = c.extraOutside;
       }
+
       overtimeFilled += toOvertime;
       flexGain += toFlex;
+      outsideUnusedTotal += outsideUnused;
       shortfall += c.shortfall;
       regularTotal += c.regular;
       workedTotal += c.workedHours;
+      inOfficeTotal += c.inOfficeHours;
+      outsideTotal += c.outsideHours;
 
       days.push({
         date: d,
@@ -209,7 +306,8 @@ const Calc = (() => {
         day,
         computed: c,
         overtimeHours: toOvertime,
-        flexGainHours: toFlex
+        flexGainHours: toFlex,
+        outsideUnusedHours: outsideUnused
       });
     }
 
@@ -220,6 +318,9 @@ const Calc = (() => {
       target,
       overtimeFilled,
       flexGain,
+      outsideUnused: outsideUnusedTotal,
+      inOfficeTotal,
+      outsideTotal,
       shortfall,
       flexNet: flexGain - shortfall,
       regularTotal,
@@ -369,6 +470,8 @@ const Calc = (() => {
     parseHM,
     formatHours,
     entryMinutes,
+    officeWindow,
+    entryOfficeSplit,
     validateDay,
     computeDay,
     weekStart,

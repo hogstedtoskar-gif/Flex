@@ -4,8 +4,12 @@
 # Run this from inside a checkout of the repo, as root, on the LXC:
 #   bash deploy/install.sh
 #
+# The checkout should live somewhere OTHER than /opt/timetracker (e.g.
+# /root/timetracker-src). If the checkout happens to BE /opt/timetracker,
+# the script performs an in-place refresh instead of copying.
+#
 # What it does (idempotent):
-#   * Installs Node.js 22 LTS (via NodeSource) if /usr/bin/node is missing
+#   * Installs Node.js (via NodeSource) if needed
 #   * Creates a system user 'timetracker'
 #   * Copies the app to /opt/timetracker
 #   * Installs production npm deps
@@ -72,13 +76,26 @@ if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
 fi
 
 # ---------- 3. App files ----------
-log "Syncing files to $APP_DIR"
 mkdir -p "$APP_DIR"
-# Copy server + public + (top-level README/.gitignore for reference). Skip data dirs.
-for d in server public; do
-  rm -rf "$APP_DIR/$d"
-  cp -a "$REPO_ROOT/$d" "$APP_DIR/"
-done
+# Safety: if the user ran this script from inside $APP_DIR itself
+# (REPO_ROOT == APP_DIR), the old logic would `rm -rf $APP_DIR/server`
+# and then try to `cp` the just-deleted source. Detect that case and
+# treat it as an in-place refresh.
+if [[ "$REPO_ROOT" == "$APP_DIR" ]]; then
+  log "Source is already $APP_DIR — skipping file sync."
+  for d in server public; do
+    if [[ ! -d "$APP_DIR/$d" ]]; then
+      err "Expected $APP_DIR/$d to exist for in-place install. Clone the repo to a different directory and re-run."
+      exit 1
+    fi
+  done
+else
+  log "Syncing files to $APP_DIR"
+  for d in server public; do
+    rm -rf "$APP_DIR/$d"
+    cp -a "$REPO_ROOT/$d" "$APP_DIR/"
+  done
+fi
 # Wipe any node_modules that came along — we install fresh on the host.
 rm -rf "$APP_DIR/server/node_modules"
 

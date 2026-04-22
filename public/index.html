@@ -254,6 +254,14 @@
             <input type="number" name="regularHoursPerDay" min="0" max="24" step="0.25" />
           </label>
           <label>
+            <span>Office hours start <em class="muted small">(HH:MM, blank = no limit)</em></span>
+            <input type="text" class="time24" name="officeStart" placeholder="07:30" />
+          </label>
+          <label>
+            <span>Office hours end <em class="muted small">(HH:MM, blank = no limit)</em></span>
+            <input type="text" class="time24" name="officeEnd" placeholder="17:30" />
+          </label>
+          <label>
             <span>Weekly overtime target (hours)</span>
             <input type="number" name="weeklyOvertimeTargetHours" min="0" max="168" step="0.25" />
           </label>

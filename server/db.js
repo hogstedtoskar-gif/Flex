@@ -37,7 +37,11 @@ const DEFAULT_SETTINGS = {
   overtimePeriodWeeks: 4,
   defaultLunchMinutes: 30,
   flexOpeningBalance: 0,
-  flexOpeningDate: ''
+  flexOpeningDate: '',
+  // Office hours window: work outside this range cannot become regular
+  // hours or flex — only overtime. Leave start/end blank to disable.
+  officeStart: '07:30',
+  officeEnd: '17:30'
 };
 
 function todayKey() {

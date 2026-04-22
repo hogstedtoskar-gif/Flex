@@ -21,10 +21,25 @@ const readline = require('readline');
 const { open } = require('./db');
 const auth = require('./auth');
 
-const DATA_DIR = path.resolve(
-  process.env.DATA_DIR || path.join(__dirname, 'data')
-);
-const DB_PATH = path.join(DATA_DIR, 'timetracker.db');
+// Resolve the DB path. Honor DATA_DIR when set (same knob as server.js).
+// Otherwise try the local dev default first, then the standard deploy
+// location so `sudo -u timetracker node .../admin.js ...` just works on
+// an installed LXC without having to remember an env var.
+const CANDIDATE_DIRS = process.env.DATA_DIR
+  ? [path.resolve(process.env.DATA_DIR)]
+  : [
+      path.join(__dirname, 'data'),      // local dev
+      '/var/lib/timetracker'              // deploy/install.sh default
+    ];
+
+let DB_PATH = null;
+for (const dir of CANDIDATE_DIRS) {
+  const candidate = path.join(dir, 'timetracker.db');
+  if (fs.existsSync(candidate)) { DB_PATH = candidate; break; }
+}
+// If nothing was found, fall through with the first candidate so the
+// error message below tells the user where we looked.
+if (!DB_PATH) DB_PATH = path.join(CANDIDATE_DIRS[0], 'timetracker.db');
 
 function help(exitCode = 0) {
   const usage = [
@@ -89,7 +104,11 @@ async function getPassword(passwordArg, confirm) {
 
 function requireDb() {
   if (!fs.existsSync(DB_PATH)) {
-    console.error(`No database at ${DB_PATH}. Start the server once first.`);
+    const searched = CANDIDATE_DIRS.map((d) => '  - ' + path.join(d, 'timetracker.db')).join('\n');
+    console.error(
+      'No timetracker.db found. Looked in:\n' + searched +
+      '\nStart the server once first, or set DATA_DIR=/path/to/data.'
+    );
     process.exit(1);
   }
   return open(DB_PATH);

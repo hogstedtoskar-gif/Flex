@@ -185,10 +185,17 @@ All `/api/*` endpoints except the ones marked *public* require the `tt_session` 
 
 ## How overtime & flex are computed
 
-1. Per day: `worked = sum(work segments)`, lunch is never counted. `regular = min(worked, dailyHours)`, `extra = max(0, worked - dailyHours)`, `shortfall = max(0, dailyHours - worked)`.
-2. Per week (starts on the configured day):
-   - If the week falls inside the configured overtime period, days are walked in order and `extra` hours fill the weekly overtime target first. Anything beyond the target becomes `flex gain`.
-   - Outside the period, all `extra` goes straight to flex.
+1. Per day, with an office window `[officeStart, officeEnd]` configured (default `07:30`–`17:30`):
+   - `worked = sum(work segments)` (lunch never counts).
+   - Each work segment is split into in-office minutes (overlap with the window) and outside-office minutes.
+   - `regular = min(inOffice, dailyHours)` — only in-office time can earn regular hours.
+   - `extraInOffice = max(0, inOffice - dailyHours)` — over-target in-office hours, eligible for overtime or flex.
+   - `extraOutside = outside` — all outside-office hours, eligible for overtime **only**.
+   - `shortfall = max(0, dailyHours - inOffice)` — outside-hours work does not reduce shortfall.
+   - If `officeStart`/`officeEnd` are blank or invalid the window is disabled and all hours are treated as in-office.
+2. Per week (starts on the configured day), days are walked in order:
+   - Inside the overtime period, the weekly overtime target is filled from `extraOutside` **first** (use-it-or-lose-it — outside hours can never become flex), then from `extraInOffice`. Any leftover `extraInOffice` becomes `flex gain`. Any leftover `extraOutside` is counted as `outsideUnused` and is discarded.
+   - Outside the overtime period, all `extraInOffice` becomes flex gain and all `extraOutside` is discarded.
    - `flex net = flex gain - shortfall`.
 3. The all-time **flex balance** is the configured opening balance plus the sum of `flex net` across every week with recorded data.
 
@@ -200,6 +207,7 @@ Configurable in the Settings view:
 |---|---|
 | Week starts on | Mon / Sun / Sat — affects week grouping everywhere |
 | Regular hours per day | Threshold above which hours become "extra" |
+| Office hours start / end | Work outside this window can only become overtime — never regular or flex. Leave blank to disable. |
 | Weekly overtime target | How many extra hours per week count as ordered overtime before overflowing to flex |
 | Overtime period start | First day of the ordered-overtime period |
 | Overtime period length | Number of weeks the overtime order applies |
