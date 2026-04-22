@@ -28,10 +28,14 @@ const Storage = (() => {
     };
   }
 
+  let onUnauthorizedHandler = null;
+  function setUnauthorizedHandler(fn) { onUnauthorizedHandler = fn; }
+
   async function http(path, opts = {}) {
     const init = {
       method: opts.method || 'GET',
-      headers: { 'Accept': 'application/json' }
+      headers: { 'Accept': 'application/json' },
+      credentials: 'same-origin'
     };
     if (opts.body !== undefined) {
       init.headers['Content-Type'] = 'application/json';
@@ -46,12 +50,71 @@ const Storage = (() => {
       } catch (_) { /* ignore */ }
       const err = new Error('HTTP ' + res.status + ': ' + detail);
       err.status = res.status;
+      if (res.status === 401 && !opts.skipUnauthorizedHandler) {
+        if (onUnauthorizedHandler) onUnauthorizedHandler();
+      }
       throw err;
     }
     if (res.status === 204) return null;
     const text = await res.text();
     if (!text) return null;
     return JSON.parse(text);
+  }
+
+  /* -------- auth -------- */
+
+  async function authConfig() {
+    try {
+      const data = await http('/auth/config', { skipUnauthorizedHandler: true });
+      return data || { allowRegistration: false };
+    } catch (_) {
+      return { allowRegistration: false };
+    }
+  }
+
+  async function whoami() {
+    try {
+      const data = await http('/auth/me', { skipUnauthorizedHandler: true });
+      return (data && data.user) || null;
+    } catch (err) {
+      if (err.status === 401) return null;
+      throw err;
+    }
+  }
+
+  async function login(username, password) {
+    const data = await http('/auth/login', {
+      method: 'POST',
+      body: { username, password },
+      skipUnauthorizedHandler: true
+    });
+    return data && data.user;
+  }
+
+  async function logout() {
+    pendingDays.clear();
+    pendingSettings = null;
+    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+    try {
+      await http('/auth/logout', { method: 'POST', skipUnauthorizedHandler: true });
+    } catch (_) { /* best effort */ }
+  }
+
+  async function register(username, password) {
+    const data = await http('/auth/register', {
+      method: 'POST',
+      body: { username, password },
+      skipUnauthorizedHandler: true
+    });
+    return data && data.user;
+  }
+
+  async function changePassword(currentPassword, newPassword) {
+    await http('/auth/change-password', {
+      method: 'POST',
+      body: { currentPassword, newPassword },
+      skipUnauthorizedHandler: true
+    });
   }
 
   async function load() {
@@ -256,6 +319,13 @@ const Storage = (() => {
     exportJson,
     exportCsv,
     importJson,
-    setErrorHandler
+    setErrorHandler,
+    setUnauthorizedHandler,
+    authConfig,
+    whoami,
+    login,
+    logout,
+    register,
+    changePassword
   };
 })();

@@ -1,8 +1,8 @@
 # Time Tracker
 
-A lightweight, single-user web app for tracking working hours with clean separation of **regular time**, **ordered overtime**, and **flex balance**.
+A lightweight, multi-user web app for tracking working hours with clean separation of **regular time**, **ordered overtime**, and **flex balance**. Each user has their own isolated data and settings.
 
-Self-hosted on your LAN. Frontend is plain HTML/CSS/vanilla JS, backend is a small Node.js + Express server that persists to SQLite via Node's built-in `node:sqlite` (no native build deps).
+Self-hosted on your LAN. Frontend is plain HTML/CSS/vanilla JS, backend is a small Node.js + Express server that persists to SQLite via Node's built-in `node:sqlite` (no native build deps). Auth is cookie-based sessions over scrypt-hashed passwords — all of it uses only `node:crypto` and `node:sqlite`, no extra dependencies.
 
 ## Architecture
 
@@ -17,7 +17,9 @@ public/                # Static UI served as-is
     app.js             # router, state, event wiring
 server/
   server.js            # Express app: serves /public + /api/*
-  db.js                # node:sqlite store (one row per day + a settings blob)
+  auth.js              # scrypt password hashing + session cookies
+  db.js                # node:sqlite store (users, sessions, per-user days + settings)
+  admin.js             # CLI: add-user / set-password / list-users / ...
   package.json         # only dep: express
 deploy/
   ct/timetracker.sh                # Proxmox-host one-liner (community-scripts style)
@@ -51,6 +53,47 @@ Optional environment overrides:
 | `HOST` | `0.0.0.0` | Bind address |
 | `DATA_DIR` | `server/data` | Where `timetracker.db` lives |
 | `PUBLIC_DIR` | `../public` | Static asset directory |
+| `BOOTSTRAP_USER` | — | If set and no login-capable users exist, create this user on first start. |
+| `BOOTSTRAP_PASSWORD` | — | Password for `BOOTSTRAP_USER`. Required when `BOOTSTRAP_USER` is set. |
+| `ALLOW_REGISTRATION` | — | Set to `1` to expose `POST /api/auth/register` (self-serve sign-up). |
+
+## Users & authentication
+
+Every request to `/api/*` (other than `/api/health`, `/api/auth/login`, `/api/auth/config`, and — when enabled — `/api/auth/register`) requires a session cookie. Sessions are stored server-side in SQLite with a 30-day sliding expiry. Passwords are hashed with scrypt.
+
+### Creating the first user
+
+On a fresh database there are no users, so you need to create one. Pick either:
+
+**Option 1 — bootstrap via env vars** (good for first-time systemd installs)
+
+```bash
+BOOTSTRAP_USER=alice BOOTSTRAP_PASSWORD='change-me-now' npm start
+```
+
+This creates the user on first start and never again. If the database was migrated from the old single-user schema, this same step *claims* the migrated data for the new account instead of creating a second one.
+
+**Option 2 — use the admin CLI**
+
+```bash
+cd server
+node admin.js add-user alice          # prompts for password
+node admin.js list-users
+node admin.js set-password alice      # rotate password + invalidate sessions
+node admin.js rename-user alice alicia
+node admin.js delete-user alice       # removes the user and all their data
+```
+
+### Self-serve registration (optional)
+
+If you want people on your LAN to sign themselves up, start the server with `ALLOW_REGISTRATION=1`. The login screen then shows a "Create one" link. Leave it off in the default setup to keep the instance private.
+
+### Migrating an existing single-user database
+
+Upgrading in place is safe: on first start after the upgrade, the old `days` and `settings` rows are re-parented to a placeholder account called `_legacy` (which has no usable password). Do one of the following to claim the data:
+
+- Set `BOOTSTRAP_USER` / `BOOTSTRAP_PASSWORD` once — the server will rename `_legacy` to your new username and set the password.
+- Or with the CLI: `node admin.js rename-user _legacy <you>` followed by `node admin.js set-password <you>`.
 
 ## Host it on a Proxmox LXC
 
@@ -99,9 +142,17 @@ To upgrade after pulling new code, just re-run `sudo bash deploy/install.sh` —
 
 ## REST API
 
+All `/api/*` endpoints except the ones marked *public* require the `tt_session` cookie obtained from `POST /api/auth/login`. All protected endpoints operate on the current user's data only.
+
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| `GET` | `/api/health` | — | `{ ok, now }` |
+| `GET` | `/api/health` *(public)* | — | `{ ok, now }` |
+| `GET` | `/api/auth/config` *(public)* | — | `{ allowRegistration }` |
+| `GET` | `/api/auth/me` | — | `{ user }` or `401` |
+| `POST` | `/api/auth/login` *(public)* | `{ username, password }` | `{ user }` + `Set-Cookie` |
+| `POST` | `/api/auth/logout` | — | 204 |
+| `POST` | `/api/auth/register` *(public, opt-in)* | `{ username, password }` | `{ user }` + `Set-Cookie` |
+| `POST` | `/api/auth/change-password` | `{ currentPassword, newPassword }` | `{ ok: true }` |
 | `GET` | `/api/state` | — | full `{ version, settings, days }` |
 | `PUT` | `/api/state` | full state | replaces everything (used by Import JSON) |
 | `PUT` | `/api/settings` | settings object | merged + persisted settings |
@@ -109,7 +160,7 @@ To upgrade after pulling new code, just re-run `sudo bash deploy/install.sh` —
 | `DELETE` | `/api/days/:date` | — | 204 |
 | `POST` | `/api/reset` | — | empty default state |
 
-`:date` must be `YYYY-MM-DD`.
+`:date` must be `YYYY-MM-DD`. The session cookie is `HttpOnly; SameSite=Lax; Path=/` — combined with same-origin fetches the UI needs no CSRF token.
 
 ## Keyboard shortcuts
 
@@ -158,12 +209,12 @@ Configurable in the Settings view:
 
 ## Backups
 
-The whole dataset is one SQLite file: `/var/lib/timetracker/timetracker.db`.
+The whole dataset (all users, sessions, days and settings) is one SQLite file: `/var/lib/timetracker/timetracker.db`.
 
-- **Export JSON backup** – downloads a portable JSON snapshot from the Settings view (recommended before any risky action).
+- **Export JSON backup** – downloads a portable JSON snapshot of the signed-in user's data from the Settings view.
 - **Export CSV** – one row per day with all computed fields, suitable for Excel.
-- **Import JSON** – replaces all data after confirmation (calls `PUT /api/state`).
-- **Reset all data** – wipes the database (calls `POST /api/reset`).
+- **Import JSON** – replaces the signed-in user's data after confirmation (calls `PUT /api/state`). Other users are not affected.
+- **Reset all data** – wipes the signed-in user's data only (calls `POST /api/reset`). Other users are not affected. To wipe the whole database, stop the service and delete the `.db` file, or use `node server/admin.js delete-user` per user.
 
 For automated backups, just snapshot the SQLite file (e.g. nightly `cp /var/lib/timetracker/timetracker.db /backups/timetracker-$(date +%F).db`) — SQLite WAL mode means a plain copy of the `.db` is consistent enough for a single-user app, but `sqlite3 file.db ".backup /path/file.db"` is safer.
 

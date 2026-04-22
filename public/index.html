@@ -22,6 +22,10 @@
     </nav>
     <div class="topbar-right">
       <span class="clock" id="live-clock"></span>
+      <div class="user-badge" id="user-badge" hidden>
+        <span class="user-name" id="user-name"></span>
+        <button class="btn btn-ghost btn-sm" id="logout-btn" title="Log out">Log out</button>
+      </div>
     </div>
   </header>
 
@@ -30,6 +34,62 @@
   <div id="toast-root" class="toast-root" aria-live="polite"></div>
 
   <!-- View templates -->
+  <template id="tpl-login">
+    <section class="view view-login">
+      <div class="card login-card">
+        <div class="card-header"><h2>Sign in</h2></div>
+        <form class="form-grid login-form" data-login-form autocomplete="on">
+          <label>
+            <span>Username</span>
+            <input type="text" name="username" autocomplete="username" autocapitalize="off"
+                   autocorrect="off" spellcheck="false" required />
+          </label>
+          <label>
+            <span>Password</span>
+            <input type="password" name="password" autocomplete="current-password" required />
+          </label>
+          <div class="login-error" data-login-error></div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Sign in</button>
+          </div>
+          <p class="muted small" data-register-hint hidden>
+            No account? <a href="#" data-action="show-register">Create one</a>.
+          </p>
+        </form>
+      </div>
+    </section>
+  </template>
+
+  <template id="tpl-register">
+    <section class="view view-login">
+      <div class="card login-card">
+        <div class="card-header"><h2>Create account</h2></div>
+        <form class="form-grid login-form" data-register-form autocomplete="on">
+          <label>
+            <span>Username</span>
+            <input type="text" name="username" autocomplete="username" autocapitalize="off"
+                   autocorrect="off" spellcheck="false" required />
+          </label>
+          <label>
+            <span>Password <em class="muted small">(min 6 chars)</em></span>
+            <input type="password" name="password" autocomplete="new-password" minlength="6" required />
+          </label>
+          <label>
+            <span>Confirm password</span>
+            <input type="password" name="confirm" autocomplete="new-password" minlength="6" required />
+          </label>
+          <div class="login-error" data-register-error></div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Create account</button>
+          </div>
+          <p class="muted small">
+            <a href="#" data-action="show-login">Back to sign in</a>
+          </p>
+        </form>
+      </div>
+    </section>
+  </template>
+
   <template id="tpl-dashboard">
     <section class="view view-dashboard">
       <div class="grid-2">
@@ -234,6 +294,28 @@
           </label>
         </div>
         <p class="muted small">Import replaces all current data after confirmation.</p>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><h2>Account</h2></div>
+        <form class="form-grid account-form" data-password-form>
+          <label>
+            <span>Current password</span>
+            <input type="password" name="currentPassword" autocomplete="current-password" required />
+          </label>
+          <label>
+            <span>New password <em class="muted small">(min 6 chars)</em></span>
+            <input type="password" name="newPassword" autocomplete="new-password" minlength="6" required />
+          </label>
+          <label>
+            <span>Confirm new password</span>
+            <input type="password" name="confirm" autocomplete="new-password" minlength="6" required />
+          </label>
+          <div class="login-error" data-password-error></div>
+          <div class="form-actions">
+            <button type="submit" class="btn">Change password</button>
+          </div>
+        </form>
       </div>
 
       <div class="card danger-zone">

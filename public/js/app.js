@@ -14,7 +14,9 @@
       const d = new Date();
       return d.getFullYear() + '-' + Calc.pad(d.getMonth() + 1);
     })(),
-    ready: false
+    ready: false,
+    user: null,
+    authView: 'login' // 'login' | 'register'
   };
 
   /* =========================================================
@@ -58,14 +60,131 @@
   function render() {
     const root = document.getElementById('view-root');
     UI.clear(root);
+    updateTopbar();
+    if (!App.user) {
+      if (App.authView === 'register') renderRegister(root);
+      else renderLogin(root);
+      return;
+    }
     if (!App.ready) {
-      root.appendChild(UI.el('div', { class: 'card', text: 'Connecting to server…' }));
+      root.appendChild(UI.el('div', { class: 'card', text: 'Loading your data…' }));
       return;
     }
     if (App.currentView === 'dashboard') renderDashboard(root);
     else if (App.currentView === 'diary') renderDiary(root);
     else if (App.currentView === 'summary') renderSummary(root);
     else if (App.currentView === 'settings') renderSettings(root);
+  }
+
+  function updateTopbar() {
+    const tabs = document.getElementById('tabs');
+    const badge = document.getElementById('user-badge');
+    const name = document.getElementById('user-name');
+    if (tabs) tabs.toggleAttribute('hidden', !App.user);
+    if (badge) badge.toggleAttribute('hidden', !App.user);
+    if (name) name.textContent = App.user ? App.user.username : '';
+  }
+
+  /* =========================================================
+     AUTH VIEWS
+     ========================================================= */
+  function renderLogin(root) {
+    const view = UI.cloneTemplate('tpl-login');
+    root.appendChild(view);
+
+    if (App.allowRegistration) {
+      const hint = view.querySelector('[data-register-hint]');
+      if (hint) hint.hidden = false;
+      const link = view.querySelector('[data-action="show-register"]');
+      if (link) link.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        App.authView = 'register';
+        render();
+      });
+    }
+
+    const form = view.querySelector('[data-login-form]');
+    const err = view.querySelector('[data-login-error]');
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      err.textContent = '';
+      const f = form.elements;
+      const submitBtn = form.querySelector('button[type="submit"]');
+      submitBtn.disabled = true;
+      try {
+        const user = await Storage.login(f['username'].value.trim(), f['password'].value);
+        await onAuthenticated(user);
+      } catch (e) {
+        err.textContent = prettifyError(e);
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+
+    setTimeout(() => form.elements['username'].focus(), 0);
+  }
+
+  function renderRegister(root) {
+    const view = UI.cloneTemplate('tpl-register');
+    root.appendChild(view);
+
+    view.querySelector('[data-action="show-login"]').addEventListener('click', (ev) => {
+      ev.preventDefault();
+      App.authView = 'login';
+      render();
+    });
+
+    const form = view.querySelector('[data-register-form]');
+    const err = view.querySelector('[data-register-error]');
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      err.textContent = '';
+      const f = form.elements;
+      if (f['password'].value !== f['confirm'].value) {
+        err.textContent = 'Passwords do not match.';
+        return;
+      }
+      const submitBtn = form.querySelector('button[type="submit"]');
+      submitBtn.disabled = true;
+      try {
+        const user = await Storage.register(f['username'].value.trim(), f['password'].value);
+        await onAuthenticated(user);
+      } catch (e) {
+        err.textContent = prettifyError(e);
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+
+    setTimeout(() => form.elements['username'].focus(), 0);
+  }
+
+  function prettifyError(err) {
+    const msg = err && err.message ? err.message : String(err);
+    return msg.replace(/^HTTP \d+:\s*/, '');
+  }
+
+  async function onAuthenticated(user) {
+    App.user = user;
+    App.authView = 'login';
+    try {
+      App.state = await Storage.load();
+      App.ready = true;
+      setView('dashboard');
+    } catch (err) {
+      App.ready = false;
+      render();
+      UI.toast('Could not load your data: ' + prettifyError(err), 'error');
+    }
+  }
+
+  async function handleLogout() {
+    await Storage.logout();
+    App.user = null;
+    App.ready = false;
+    App.state = Storage.emptyState();
+    App.currentView = 'dashboard';
+    render();
   }
 
   /* =========================================================
@@ -779,6 +898,31 @@
         UI.toast('Reset failed: ' + err.message, 'error');
       }
     });
+
+    const pwdForm = view.querySelector('[data-password-form]');
+    const pwdErr = view.querySelector('[data-password-error]');
+    if (pwdForm) {
+      pwdForm.addEventListener('submit', async (ev) => {
+        ev.preventDefault();
+        pwdErr.textContent = '';
+        const f = pwdForm.elements;
+        if (f['newPassword'].value !== f['confirm'].value) {
+          pwdErr.textContent = 'New passwords do not match.';
+          return;
+        }
+        const submitBtn = pwdForm.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        try {
+          await Storage.changePassword(f['currentPassword'].value, f['newPassword'].value);
+          pwdForm.reset();
+          UI.toast('Password changed', 'success');
+        } catch (err) {
+          pwdErr.textContent = prettifyError(err);
+        } finally {
+          submitBtn.disabled = false;
+        }
+      });
+    }
   }
 
   /* =========================================================
@@ -794,7 +938,7 @@
     document.addEventListener('keydown', (ev) => {
       if (ev.target && /^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName)) return;
       if (ev.altKey || ev.ctrlKey || ev.metaKey) return;
-      if (!App.ready) return;
+      if (!App.ready || !App.user) return;
       const todayKey = Calc.toDateKey(new Date());
       const k = ev.key.toLowerCase();
       if (k === 'i') { clockIn(todayKey); }
@@ -833,23 +977,49 @@
     UI.toast('Save failed: ' + err.message, 'error');
   });
 
+  // If the server tells us we are no longer authenticated (e.g. the
+  // session got revoked), drop to the login screen instead of looping
+  // failed writes.
+  Storage.setUnauthorizedHandler(() => {
+    if (!App.user) return;
+    App.user = null;
+    App.ready = false;
+    App.state = Storage.emptyState();
+    App.currentView = 'dashboard';
+    render();
+    UI.toast('Session expired — please sign in again.', 'info');
+  });
+
+  function setupLogout() {
+    const btn = document.getElementById('logout-btn');
+    if (btn) btn.addEventListener('click', handleLogout);
+  }
+
   async function init() {
     setupTabs();
     setupHotkeys();
     setupLiveClock();
     setupBeforeUnloadFlush();
-    setView('dashboard');
+    setupLogout();
+    const cfg = await Storage.authConfig();
+    App.allowRegistration = !!cfg.allowRegistration;
 
     try {
+      const user = await Storage.whoami();
+      if (!user) {
+        render();
+        return;
+      }
+      App.user = user;
       App.state = await Storage.load();
       App.ready = true;
-      render();
+      setView('dashboard');
     } catch (err) {
       const root = document.getElementById('view-root');
       UI.clear(root);
       root.appendChild(UI.el('div', {
         class: 'card alert alert-danger',
-        text: 'Could not load data from server: ' + err.message
+        text: 'Could not reach the server: ' + prettifyError(err)
           + ' — make sure the backend is running.'
       }));
     }
