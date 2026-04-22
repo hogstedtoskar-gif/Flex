@@ -159,15 +159,115 @@ All `/api/*` endpoints except the ones marked *public* require the `tt_session` 
 | `PUT` | `/api/days/:date` | `{ entries, note }` | the saved day, or 204 if it became empty |
 | `DELETE` | `/api/days/:date` | — | 204 |
 | `POST` | `/api/reset` | — | empty default state |
+| `GET` | `/api/auth/tokens` | — | list of phone-widget tokens (no plaintext) |
+| `POST` | `/api/auth/tokens` | `{ label }` | `{ id, label, token }` — plaintext returned **once** |
+| `DELETE` | `/api/auth/tokens/:id` | — | 204 |
+| `GET` | `/api/quick/status` | — | `{ state, since, today }` — accepts cookie or `Authorization: Bearer ttk_…` |
+| `POST` | `/api/quick/clock-in` | *(optional `tz`/`date`/`time`)* | status snapshot; 409 if already clocked in |
+| `POST` | `/api/quick/clock-out` | *(optional `tz`/`date`/`time`)* | status snapshot; 409 if not working |
+| `POST` | `/api/quick/lunch-toggle` | *(optional `tz`/`date`/`time`)* | status snapshot; toggles between `working` and `lunch` |
 
-`:date` must be `YYYY-MM-DD`. The session cookie is `HttpOnly; SameSite=Lax; Path=/` — combined with same-origin fetches the UI needs no CSRF token.
+`:date` must be `YYYY-MM-DD`. The session cookie is `HttpOnly; SameSite=Lax; Path=/` — combined with same-origin fetches the UI needs no CSRF token. Bearer API tokens are only accepted on `/api/quick/*` — every other protected route requires a real session.
 
 ## Keyboard shortcuts
 
 - `I` – Clock in
 - `O` – Clock out
 - `L` – Start/end lunch (depending on current state)
-- `1` / `2` / `3` / `4` – Switch to Dashboard / Diary / Summary / Settings
+- `1` / `2` / `3` / `4` / `5` – Switch to Dashboard / Diary / Summary / Quick / Settings
+
+## Phone: install as a PWA + one-tap home-screen widget
+
+Time Tracker ships a small PWA shell and a dedicated **Quick** view with three giant
+touch-friendly buttons. Combined with a long-lived API token, you can drive it from a
+real one-tap home-screen widget on both iOS and Android — no extra apps required on
+the server, no app-store accounts.
+
+### Install the app itself (optional, but nice)
+
+1. Open `http://<your-server>:8787/quick` on the phone.
+2. iOS Safari: <b>Share → Add to Home Screen</b>.
+3. Android Chrome: menu → <b>Install app</b> (or <b>Add to Home screen</b>).
+
+The icon now opens straight into the Quick view in a chromeless full-screen window.
+The app shell is cached by a service worker, so it opens instantly even on bad Wi-Fi.
+
+### Create an API token for widgets
+
+1. Sign in on the browser, go to <b>Settings → Phone widget</b>.
+2. Enter a label (e.g. `iPhone home`) and click <b>Create token</b>.
+3. Copy the `ttk_…` value immediately — it is shown <b>once</b>. If you lose it, revoke
+   and create a new one.
+
+Tokens can only drive the `/api/quick/*` endpoints. They cannot log in to the web UI,
+read historical data, change the password, or create more tokens. Revoke any token
+from the same Settings page.
+
+### iOS — Shortcuts + home-screen widget
+
+1. Open the built-in <b>Shortcuts</b> app → <b>+</b> (new shortcut).
+2. Add the action <b>Get contents of URL</b>.
+3. Tap <b>Show More</b>:
+   - Method: <b>POST</b>.
+   - Headers: add <code>Authorization</code> = <code>Bearer ttk_…</code> (paste the
+     token you created).
+4. URL: `https://your-server/api/quick/clock-in` (or `/clock-out`, or `/lunch-toggle`).
+5. Rename the shortcut (e.g. "Clock in"), tap <b>Done</b>.
+6. Long-press the home screen → <b>Edit</b> → <b>+</b> → <b>Shortcuts</b> widget → pick
+   the shortcut. You now have a real one-tap widget.
+
+Repeat for "Clock out" and "Toggle lunch" if you want three widgets, or use the iOS 17+
+interactive widget that groups several shortcuts.
+
+Tip: put the three shortcuts in a *Stack* on the home screen to save space.
+
+### Android — HTTP Shortcuts widget
+
+The open-source [HTTP Shortcuts](https://http-shortcuts.rmy.ch/) app (F-Droid / Play
+Store) can place a one-tap widget:
+
+1. Install <b>HTTP Shortcuts</b>.
+2. Create a new shortcut → Method: <b>POST</b>.
+3. URL: `https://your-server/api/quick/clock-in`.
+4. Under <b>Headers</b>, add `Authorization: Bearer ttk_…`.
+5. Save. Repeat for `clock-out` and `lunch-toggle`.
+6. Long-press the home screen → <b>Widgets</b> → <b>HTTP Shortcuts</b> → select the
+   shortcut → drop it where you want.
+
+Tasker users can drive the same endpoints via an HTTP Request action and any of
+Tasker's widget/AutoInput options.
+
+### Quick-action API (for any widget / automation)
+
+All endpoints accept either the browser session cookie or `Authorization: Bearer <token>`.
+Optional query (or JSON body) parameters let the widget pass the phone's clock/timezone:
+
+| Param | Example | Meaning |
+|---|---|---|
+| `tz` | `Europe/Stockholm` | IANA timezone for "now" (default: server-local) |
+| `date` | `2026-04-22` | Force the day the entry lands in |
+| `time` | `08:03` | Force the clock time of the action |
+
+| Method | Path | Behaviour |
+|---|---|---|
+| `GET` | `/api/quick/status` | Current `state` (`off`/`working`/`lunch`), `since`, and `today` totals |
+| `POST` | `/api/quick/clock-in` | Start a new work segment. 409 if already clocked in |
+| `POST` | `/api/quick/clock-out` | Close the open work segment. 409 if not working |
+| `POST` | `/api/quick/lunch-toggle` | Start lunch if working; end lunch (resume work) if on lunch |
+
+Response body is a status snapshot:
+
+```json
+{
+  "date": "2026-04-22",
+  "state": "working",
+  "since": "08:03",
+  "today": { "workedHours": 0, "lunchHours": 0 }
+}
+```
+
+Each token is rate-limited to 30 requests / 60 s to protect the server from a runaway
+widget. Revoking a token is immediate.
 
 ## Features
 

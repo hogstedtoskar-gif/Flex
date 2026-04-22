@@ -25,6 +25,10 @@ yarn-error.log*
 
 # Server runtime data (SQLite db + WAL/SHM files)
 server/data/
+server/data-smoke/
 *.db
 *.db-wal
 *.db-shm
+
+# Per-install API-token pepper (lives in DATA_DIR alongside the DB)
+auth.key

@@ -4,8 +4,16 @@
 <html lang="en-GB">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#4f8cff" media="(prefers-color-scheme: light)" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Time Tracker" />
   <title>Time Tracker</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/svg+xml" href="/icons/icon.svg" />
+  <link rel="apple-touch-icon" href="/icons/icon.svg" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -18,6 +26,7 @@
       <button class="tab" data-view="dashboard">Dashboard</button>
       <button class="tab" data-view="diary">Diary</button>
       <button class="tab" data-view="summary">Summary</button>
+      <button class="tab" data-view="quick">Quick</button>
       <button class="tab" data-view="settings">Settings</button>
     </nav>
     <div class="topbar-right">
@@ -236,6 +245,37 @@
     </section>
   </template>
 
+  <template id="tpl-quick">
+    <section class="view view-quick">
+      <div class="quick-card">
+        <div class="quick-status" data-quick-status>
+          <div class="quick-status-dot"></div>
+          <div class="quick-status-text">Loading…</div>
+          <div class="quick-status-sub muted"></div>
+        </div>
+
+        <div class="quick-totals" data-quick-totals></div>
+
+        <div class="quick-buttons">
+          <button class="quick-btn quick-btn-in" data-quick-action="clock-in">
+            <span class="quick-btn-label">Clock in</span>
+          </button>
+          <button class="quick-btn quick-btn-lunch" data-quick-action="lunch-toggle">
+            <span class="quick-btn-label" data-quick-lunch-label>Toggle lunch</span>
+          </button>
+          <button class="quick-btn quick-btn-out" data-quick-action="clock-out">
+            <span class="quick-btn-label">Clock out</span>
+          </button>
+        </div>
+
+        <div class="quick-hint muted small">
+          Tip: tap the browser "Add to Home Screen" button to install this as an app icon on your phone.
+          For a one-tap home-screen widget, create an API token in <a href="#" data-action="go-settings">Settings → Phone widget</a>.
+        </div>
+      </div>
+    </section>
+  </template>
+
   <template id="tpl-settings">
     <section class="view view-settings">
       <div class="card">
@@ -332,6 +372,60 @@
             <button type="submit" class="btn">Change password</button>
           </div>
         </form>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h2>Phone widget</h2>
+          <span class="muted">API tokens for Shortcuts / HTTP-Shortcut apps</span>
+        </div>
+        <p class="muted small">
+          Create a long-lived token and paste it into your phone's Shortcuts app
+          to get a one-tap home-screen widget that clocks you in or out.
+          Tokens give widget access only — they can't log in to this page or
+          change your password.
+        </p>
+
+        <form class="tokens-create" data-tokens-form>
+          <label>
+            <span>Label <em class="muted small">(e.g. "iPhone home", "Work Android")</em></span>
+            <input type="text" name="label" maxlength="64" placeholder="iPhone home" />
+          </label>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Create token</button>
+          </div>
+        </form>
+
+        <div class="tokens-reveal" data-tokens-reveal hidden>
+          <p class="muted small"><strong>Copy this token now — it will not be shown again.</strong></p>
+          <div class="tokens-reveal-row">
+            <code class="tokens-reveal-value" data-tokens-reveal-value></code>
+            <button type="button" class="btn" data-action="copy-token">Copy</button>
+          </div>
+          <details class="tokens-setup">
+            <summary>iOS Shortcuts setup</summary>
+            <ol class="muted small">
+              <li>Open the <b>Shortcuts</b> app → <b>+</b> (new shortcut).</li>
+              <li>Add action <b>"Get contents of URL"</b>.</li>
+              <li>Tap <b>Show More</b> → Method: <b>POST</b>.</li>
+              <li>Headers: add <code>Authorization</code> = <code>Bearer <span data-tokens-reveal-value2></span></code></li>
+              <li>URL: <code data-tokens-url>https://.../api/quick/clock-in</code> (use <code>clock-out</code> / <code>lunch-toggle</code> for the others).</li>
+              <li>Name it "Clock In", then on iOS 16+ → <b>Add to Home Screen</b>, or use the Shortcuts home-screen widget.</li>
+            </ol>
+          </details>
+          <details class="tokens-setup">
+            <summary>Android "HTTP Shortcuts" setup</summary>
+            <ol class="muted small">
+              <li>Install the free <b>HTTP Shortcuts</b> app (F-Droid / Play Store).</li>
+              <li>Create a new shortcut. Method: <b>POST</b>.</li>
+              <li>URL: <code data-tokens-url2>https://.../api/quick/clock-in</code></li>
+              <li>Headers: <code>Authorization: Bearer <span data-tokens-reveal-value3></span></code></li>
+              <li>Save, then long-press the home screen → Widgets → HTTP Shortcuts → pick the shortcut.</li>
+            </ol>
+          </details>
+        </div>
+
+        <div class="tokens-list" data-tokens-list></div>
       </div>
 
       <div class="card danger-zone">

@@ -121,6 +121,41 @@ const Storage = (() => {
     });
   }
 
+  /* -------- api tokens (phone widget) -------- */
+
+  async function listTokens() {
+    const data = await http('/auth/tokens');
+    return (data && data.tokens) || [];
+  }
+
+  async function createToken(label) {
+    return http('/auth/tokens', {
+      method: 'POST',
+      body: { label: label || 'widget' }
+    });
+  }
+
+  async function deleteToken(id) {
+    await http('/auth/tokens/' + encodeURIComponent(id), { method: 'DELETE' });
+  }
+
+  /* -------- quick actions (used by /quick page and by external widgets) -------- */
+
+  async function quickStatus() {
+    return http('/quick/status?tz=' + encodeURIComponent(guessTz()));
+  }
+
+  async function quickAction(action) {
+    return http('/quick/' + action + '?tz=' + encodeURIComponent(guessTz()), {
+      method: 'POST'
+    });
+  }
+
+  function guessTz() {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; }
+    catch (_) { return ''; }
+  }
+
   async function load() {
     try {
       const state = await http('/state');
@@ -337,6 +372,11 @@ const Storage = (() => {
     login,
     logout,
     register,
-    changePassword
+    changePassword,
+    listTokens,
+    createToken,
+    deleteToken,
+    quickStatus,
+    quickAction
   };
 })();

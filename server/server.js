@@ -19,6 +19,7 @@ const fs = require('fs');
 const express = require('express');
 const { open } = require('./db');
 const auth = require('./auth');
+const quick = require('./quick');
 
 const PORT = parseInt(process.env.PORT || '8787', 10);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -30,6 +31,7 @@ const ALLOW_REGISTRATION = process.env.ALLOW_REGISTRATION === '1';
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const store = open(DB_PATH);
+auth.initApiTokenPepper(DATA_DIR);
 bootstrap(store);
 // Clean up stale sessions on startup and every 6h afterwards.
 try { store.purgeOldSessions(`-${auth.SESSION_MAX_AGE_DAYS}`); } catch (_) { /* noop */ }
@@ -110,6 +112,46 @@ authApi.post('/change-password', auth.requireAuth, (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+/* API tokens — managed from the browser only (not from another token).
+ * This is enforced by `requireSession` below so a stolen widget token
+ * can't be used to mint more tokens or look at existing labels. */
+function requireSession(req, _res, next) {
+  if (!req.user) { const e = new Error('Not authenticated'); e.status = 401; return next(e); }
+  if (!req.sessionToken) { const e = new Error('Session required'); e.status = 403; return next(e); }
+  next();
+}
+
+authApi.get('/tokens', requireSession, (req, res, next) => {
+  try { res.json({ tokens: store.listApiTokens(req.user.id) }); }
+  catch (err) { next(err); }
+});
+
+authApi.post('/tokens', requireSession, (req, res, next) => {
+  try {
+    const label = (req.body && req.body.label) || 'widget';
+    const existing = store.listApiTokens(req.user.id);
+    if (existing.length >= 10) throw httpErr(400, 'Maximum of 10 tokens per user');
+    const { plaintext, hash } = auth.newApiToken();
+    const row = store.createApiToken(req.user.id, hash, label);
+    res.status(201).json({
+      id: row.id,
+      label: row.label,
+      // The plaintext is only returned HERE, never again.
+      token: plaintext
+    });
+  } catch (err) { next(err); }
+});
+
+authApi.delete('/tokens/:id', requireSession, (req, res, next) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) throw httpErr(400, 'bad token id');
+    const ok = store.deleteApiToken(req.user.id, id);
+    if (!ok) return res.status(404).json({ error: 'not found' });
+    res.status(204).end();
+  } catch (err) { next(err); }
+});
+
 if (ALLOW_REGISTRATION) {
   authApi.post('/register', (req, res, next) => {
     try {
@@ -131,6 +173,74 @@ app.use('/api/auth', authApi);
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, now: new Date().toISOString() });
 });
+
+/* ----------------- Quick actions (phone widget) -----------------
+ * Accepts either a session cookie OR Authorization: Bearer ttk_... .
+ * Rate-limited per token to stop a runaway widget / accidental double
+ * tap from flooding the server. */
+
+const quickHitsByToken = new Map();
+const QUICK_WINDOW_MS = 60 * 1000;
+const QUICK_MAX_PER_WINDOW = 30;
+function rateLimitQuick(req, _res, next) {
+  const key = req.apiTokenId ? 'tok:' + req.apiTokenId : ('sess:' + (req.user && req.user.id));
+  const now = Date.now();
+  const entry = quickHitsByToken.get(key) || { count: 0, firstAt: now };
+  if (now - entry.firstAt > QUICK_WINDOW_MS) {
+    entry.count = 0;
+    entry.firstAt = now;
+  }
+  entry.count++;
+  quickHitsByToken.set(key, entry);
+  if (entry.count > QUICK_MAX_PER_WINDOW) {
+    const retry = Math.ceil((QUICK_WINDOW_MS - (now - entry.firstAt)) / 1000);
+    const err = new Error('Too many requests');
+    err.status = 429;
+    return next(err);
+  }
+  next();
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of quickHitsByToken) {
+    if (now - v.firstAt > QUICK_WINDOW_MS * 5) quickHitsByToken.delete(k);
+  }
+}, QUICK_WINDOW_MS).unref();
+
+const quickApi = express.Router();
+quickApi.use(auth.loadBearerToken(store));
+quickApi.use(auth.requireAuth);
+quickApi.use(rateLimitQuick);
+
+function resolveQuickInput(req) {
+  return {
+    tz: (req.body && req.body.tz) || req.query.tz || '',
+    date: (req.body && req.body.date) || req.query.date || '',
+    time: (req.body && req.body.time) || req.query.time || ''
+  };
+}
+
+quickApi.get('/status', (req, res, next) => {
+  try { res.json(quick.statusOf(store, req.user.id, resolveQuickInput(req))); }
+  catch (err) { next(err); }
+});
+
+quickApi.post('/clock-in', (req, res, next) => {
+  try { res.json(quick.clockIn(store, req.user.id, resolveQuickInput(req))); }
+  catch (err) { next(err); }
+});
+
+quickApi.post('/clock-out', (req, res, next) => {
+  try { res.json(quick.clockOut(store, req.user.id, resolveQuickInput(req))); }
+  catch (err) { next(err); }
+});
+
+quickApi.post('/lunch-toggle', (req, res, next) => {
+  try { res.json(quick.lunchToggle(store, req.user.id, resolveQuickInput(req))); }
+  catch (err) { next(err); }
+});
+
+app.use('/api/quick', quickApi);
 
 /* ----------------- Protected API ----------------- */
 

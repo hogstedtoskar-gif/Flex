@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Maskable icon: main content lives inside the 40% safe zone
+       (i.e. within a 307x307 square centered on 256,256). The full
+       canvas is a solid color so platforms can mask it into any
+       shape (circle, squircle, etc.) without revealing edges. -->
+  <rect width="512" height="512" fill="#4f8cff"/>
+  <circle cx="256" cy="256" r="120" fill="none" stroke="#ffffff" stroke-width="22"/>
+  <circle cx="256" cy="256" r="10" fill="#ffffff"/>
+  <path d="M256 256 L256 176" stroke="#ffffff" stroke-width="16" stroke-linecap="round"/>
+  <path d="M256 256 L316 284" stroke="#ffffff" stroke-width="16" stroke-linecap="round"/>
+</svg>

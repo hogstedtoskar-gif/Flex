@@ -73,6 +73,7 @@
     if (App.currentView === 'dashboard') renderDashboard(root);
     else if (App.currentView === 'diary') renderDiary(root);
     else if (App.currentView === 'summary') renderSummary(root);
+    else if (App.currentView === 'quick') renderQuick(root);
     else if (App.currentView === 'settings') renderSettings(root);
   }
 
@@ -170,7 +171,7 @@
     try {
       App.state = await Storage.load();
       App.ready = true;
-      setView('dashboard');
+      setView(initialViewFromUrl());
     } catch (err) {
       App.ready = false;
       render();
@@ -969,6 +970,8 @@
       }
     });
 
+    setupTokensUI(view);
+
     const pwdForm = view.querySelector('[data-password-form]');
     const pwdErr = view.querySelector('[data-password-error]');
     if (pwdForm) {
@@ -993,6 +996,202 @@
         }
       });
     }
+  }
+
+  /* =========================================================
+     QUICK (phone-optimized clock-in/out view)
+     ========================================================= */
+  function renderQuick(root) {
+    const view = UI.cloneTemplate('tpl-quick');
+    root.appendChild(view);
+
+    const statusEl = view.querySelector('[data-quick-status]');
+    const textEl = view.querySelector('.quick-status-text');
+    const subEl = view.querySelector('.quick-status-sub');
+    const totalsEl = view.querySelector('[data-quick-totals]');
+    const btnIn = view.querySelector('[data-quick-action="clock-in"]');
+    const btnLunch = view.querySelector('[data-quick-action="lunch-toggle"]');
+    const btnOut = view.querySelector('[data-quick-action="clock-out"]');
+    const lunchLabel = view.querySelector('[data-quick-lunch-label]');
+    const goSettings = view.querySelector('[data-action="go-settings"]');
+
+    function applyStatus(s) {
+      statusEl.classList.remove('state-off', 'state-working', 'state-lunch');
+      statusEl.classList.add('state-' + s.state);
+      if (s.state === 'working') {
+        textEl.textContent = 'Clocked in';
+        subEl.textContent = s.since ? 'since ' + s.since : '';
+      } else if (s.state === 'lunch') {
+        textEl.textContent = 'On lunch';
+        subEl.textContent = s.since ? 'since ' + s.since : '';
+      } else {
+        textEl.textContent = 'Not clocked in';
+        subEl.textContent = s.date || '';
+      }
+
+      UI.clear(totalsEl);
+      if (s.today) {
+        totalsEl.appendChild(UI.stat('Worked today', Calc.formatHours(s.today.workedHours || 0)));
+        totalsEl.appendChild(UI.stat('Lunch today', Calc.formatHours(s.today.lunchHours || 0)));
+      }
+
+      btnIn.disabled = s.state !== 'off';
+      btnOut.disabled = s.state !== 'working';
+      btnLunch.disabled = s.state === 'off';
+      lunchLabel.textContent = s.state === 'lunch' ? 'End lunch' : 'Start lunch';
+    }
+
+    async function refresh() {
+      try {
+        const s = await Storage.quickStatus();
+        applyStatus(s);
+      } catch (err) {
+        textEl.textContent = 'Offline';
+        subEl.textContent = prettifyError(err);
+      }
+    }
+
+    async function doAction(action) {
+      const button = view.querySelector('[data-quick-action="' + action + '"]');
+      if (!button) return;
+      button.disabled = true;
+      try {
+        const s = await Storage.quickAction(action);
+        applyStatus(s);
+        // Also refresh local state so the other views see the change
+        // without a full reload.
+        try { App.state = await Storage.load(); } catch (_) { /* ignore */ }
+        UI.toast(action.replace('-', ' ') + ' ok', 'success');
+      } catch (err) {
+        UI.toast(prettifyError(err), 'error');
+        await refresh();
+      }
+    }
+
+    btnIn.addEventListener('click', () => doAction('clock-in'));
+    btnOut.addEventListener('click', () => doAction('clock-out'));
+    btnLunch.addEventListener('click', () => doAction('lunch-toggle'));
+
+    if (goSettings) {
+      goSettings.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        setView('settings');
+      });
+    }
+
+    refresh();
+
+    // If this render was triggered by a `?action=...` URL (PWA shortcut),
+    // fire that action automatically once.
+    const params = new URLSearchParams(window.location.search);
+    const auto = params.get('action');
+    if (auto && ['clock-in', 'clock-out', 'lunch-toggle'].includes(auto)) {
+      // Drop it from the URL so a refresh doesn't fire again.
+      history.replaceState({}, '', window.location.pathname);
+      setTimeout(() => doAction(auto), 50);
+    }
+  }
+
+  /* =========================================================
+     TOKENS (phone widget management, lives inside Settings)
+     ========================================================= */
+  function setupTokensUI(view) {
+    const form = view.querySelector('[data-tokens-form]');
+    const reveal = view.querySelector('[data-tokens-reveal]');
+    const revealVal = view.querySelector('[data-tokens-reveal-value]');
+    const revealVal2 = view.querySelector('[data-tokens-reveal-value2]');
+    const revealVal3 = view.querySelector('[data-tokens-reveal-value3]');
+    const tokensUrl = view.querySelector('[data-tokens-url]');
+    const tokensUrl2 = view.querySelector('[data-tokens-url2]');
+    const listEl = view.querySelector('[data-tokens-list]');
+    const copyBtn = view.querySelector('[data-action="copy-token"]');
+    if (!form || !listEl) return;
+
+    const widgetUrl = window.location.origin + '/api/quick/clock-in';
+    if (tokensUrl) tokensUrl.textContent = widgetUrl;
+    if (tokensUrl2) tokensUrl2.textContent = widgetUrl;
+
+    async function refreshList() {
+      try {
+        const tokens = await Storage.listTokens();
+        UI.clear(listEl);
+        if (!tokens.length) {
+          listEl.appendChild(UI.el('div', {
+            class: 'tokens-empty',
+            text: 'No tokens yet. Create one above to set up a phone widget.'
+          }));
+          return;
+        }
+        for (const t of tokens) {
+          const row = UI.el('div', { class: 'tokens-row' });
+          const info = UI.el('div');
+          info.appendChild(UI.el('div', { class: 'tokens-row-label', text: t.label || 'widget' }));
+          const metaBits = [];
+          if (t.created_at) metaBits.push('created ' + t.created_at);
+          metaBits.push(t.last_used_at ? ('last used ' + t.last_used_at) : 'never used');
+          info.appendChild(UI.el('div', {
+            class: 'tokens-row-meta',
+            text: metaBits.join(' · ')
+          }));
+          row.appendChild(info);
+          const del = UI.el('button', { class: 'btn btn-ghost btn-sm', text: 'Revoke' });
+          del.addEventListener('click', async () => {
+            if (!UI.confirmDialog('Revoke this token? Any widget using it will stop working.')) return;
+            try {
+              await Storage.deleteToken(t.id);
+              UI.toast('Token revoked', 'info');
+              refreshList();
+            } catch (err) {
+              UI.toast('Revoke failed: ' + prettifyError(err), 'error');
+            }
+          });
+          row.appendChild(del);
+          listEl.appendChild(row);
+        }
+      } catch (err) {
+        UI.clear(listEl);
+        listEl.appendChild(UI.el('div', {
+          class: 'tokens-empty',
+          text: 'Could not load tokens: ' + prettifyError(err)
+        }));
+      }
+    }
+
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const label = (form.elements['label'].value || '').trim() || 'widget';
+      const submitBtn = form.querySelector('button[type="submit"]');
+      submitBtn.disabled = true;
+      try {
+        const created = await Storage.createToken(label);
+        form.reset();
+        reveal.hidden = false;
+        if (revealVal) revealVal.textContent = created.token;
+        if (revealVal2) revealVal2.textContent = created.token;
+        if (revealVal3) revealVal3.textContent = created.token;
+        UI.toast('Token created — copy it now!', 'success');
+        refreshList();
+      } catch (err) {
+        UI.toast('Create failed: ' + prettifyError(err), 'error');
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+
+    if (copyBtn) {
+      copyBtn.addEventListener('click', async () => {
+        const val = revealVal && revealVal.textContent;
+        if (!val) return;
+        try {
+          await navigator.clipboard.writeText(val);
+          UI.toast('Copied to clipboard', 'success');
+        } catch (_) {
+          UI.toast('Could not copy — select and copy manually', 'error');
+        }
+      });
+    }
+
+    refreshList();
   }
 
   /* =========================================================
@@ -1021,8 +1220,28 @@
       else if (k === '1') setView('dashboard');
       else if (k === '2') setView('diary');
       else if (k === '3') setView('summary');
-      else if (k === '4') setView('settings');
+      else if (k === '4') setView('quick');
+      else if (k === '5') setView('settings');
     });
+  }
+
+  function registerServiceWorker() {
+    if (!('serviceWorker' in navigator)) return;
+    // Only register on HTTPS or localhost — browsers block it otherwise.
+    const ok = window.isSecureContext || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+    if (!ok) return;
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').catch((err) => {
+        console.warn('Service worker registration failed:', err);
+      });
+    });
+  }
+
+  function initialViewFromUrl() {
+    // If the user opens /quick (or the PWA was launched with start_url
+    // = /quick), jump straight to the Quick view after login.
+    if (window.location.pathname === '/quick') return 'quick';
+    return 'dashboard';
   }
 
   function setupLiveClock() {
@@ -1071,6 +1290,15 @@
     setupLiveClock();
     setupBeforeUnloadFlush();
     setupLogout();
+    registerServiceWorker();
+
+    // When launched as a PWA directly into /quick, hide the chrome so
+    // the Quick page is the whole app.
+    if (window.matchMedia('(display-mode: standalone)').matches
+        && window.location.pathname === '/quick') {
+      document.body.classList.add('pwa-quick-only');
+    }
+
     const cfg = await Storage.authConfig();
     App.allowRegistration = !!cfg.allowRegistration;
 
@@ -1083,7 +1311,7 @@
       App.user = user;
       App.state = await Storage.load();
       App.ready = true;
-      setView('dashboard');
+      setView(initialViewFromUrl());
     } catch (err) {
       const root = document.getElementById('view-root');
       UI.clear(root);

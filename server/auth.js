@@ -8,15 +8,26 @@
  *     in SQLite; the client sees only the cookie `tt_session=<token>`.
  *     Cookie is HttpOnly + SameSite=Lax. Same-origin + Lax gives us
  *     enough CSRF protection for this LAN app.
- *   - `requireAuth` middleware looks up the session and attaches
- *     `req.user = { id, username }`. Public routes opt out by not using it.
+ *   - API tokens (for the phone-widget endpoints) are high-entropy
+ *     random strings prefixed with `ttk_`. They are shown to the user
+ *     exactly once at creation time; we store only HMAC-SHA-256 over
+ *     the raw token (keyed by a random per-install pepper, written to
+ *     DATA_DIR/auth.key). Because the tokens are 32 random bytes each,
+ *     a plain keyed hash gives deterministic lookup without a salt while
+ *     still being resistant to offline attack if the DB leaks.
+ *   - `requireAuth` middleware looks up the session (or bearer token)
+ *     and attaches `req.user = { id, username }`. Public routes opt
+ *     out by not using it.
  */
 
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 
 const COOKIE_NAME = 'tt_session';
 const SESSION_MAX_AGE_DAYS = 30;
 const SESSION_MAX_AGE_SECONDS = SESSION_MAX_AGE_DAYS * 24 * 60 * 60;
+const TOKEN_PREFIX = 'ttk_';
 
 // scrypt parameters: N=16384 (2^14), r=8, p=1 is OWASP's baseline.
 const SCRYPT_N = 16384;
@@ -68,6 +79,53 @@ function verifyPassword(password, stored) {
 
 function newSessionToken() {
   return crypto.randomBytes(32).toString('hex');
+}
+
+/* ---------------- api tokens ---------------- */
+
+// Per-install pepper for HMAC-hashing API tokens. Lives alongside
+// timetracker.db so backups carry it. Generated on first use.
+let _pepperPath = null;
+let _pepper = null;
+function initApiTokenPepper(dataDir) {
+  _pepperPath = path.join(dataDir, 'auth.key');
+  try {
+    _pepper = fs.readFileSync(_pepperPath);
+    if (_pepper.length < 32) _pepper = null;
+  } catch (_) { _pepper = null; }
+  if (!_pepper) {
+    _pepper = crypto.randomBytes(32);
+    fs.writeFileSync(_pepperPath, _pepper, { mode: 0o600 });
+    try { fs.chmodSync(_pepperPath, 0o600); } catch (_) { /* windows */ }
+  }
+}
+
+function ensurePepper() {
+  if (!_pepper) {
+    throw new Error('API token pepper is not initialised — call initApiTokenPepper() at startup.');
+  }
+  return _pepper;
+}
+
+// Generate a new API token; returns { plaintext, hash }.
+// The plaintext is "ttk_" + 32 url-safe bytes; the caller shows it to
+// the user once, and only the hash goes to the database.
+function newApiToken() {
+  const raw = crypto.randomBytes(32).toString('base64url');
+  const plaintext = TOKEN_PREFIX + raw;
+  return { plaintext, hash: hashApiToken(plaintext) };
+}
+
+function hashApiToken(plaintext) {
+  if (typeof plaintext !== 'string' || !plaintext) return '';
+  return crypto
+    .createHmac('sha256', ensurePepper())
+    .update(plaintext)
+    .digest('base64');
+}
+
+function isApiToken(str) {
+  return typeof str === 'string' && str.startsWith(TOKEN_PREFIX) && str.length > TOKEN_PREFIX.length + 10;
 }
 
 /* ---------------- cookies ---------------- */
@@ -144,6 +202,31 @@ function loadSession(store) {
   };
 }
 
+// Separate middleware: resolve a Bearer API token to a user, WITHOUT
+// setting `req.sessionToken`. Mount this only on routes that should
+// accept tokens (the phone-widget endpoints), so a stolen token can't
+// be used to mint new tokens, read all history, or change the password.
+function loadBearerToken(store) {
+  return (req, _res, next) => {
+    if (req.user) return next(); // already authed via cookie
+    const bearer = parseBearer(req.headers.authorization);
+    if (bearer && isApiToken(bearer)) {
+      const row = store.getUserByApiTokenHash(hashApiToken(bearer));
+      if (row) {
+        req.user = { id: row.id, username: row.username };
+        req.apiTokenId = row.token_id;
+      }
+    }
+    next();
+  };
+}
+
+function parseBearer(header) {
+  if (!header || typeof header !== 'string') return null;
+  const m = /^Bearer\s+(.+)$/i.exec(header.trim());
+  return m ? m[1].trim() : null;
+}
+
 function requireAuth(req, res, next) {
   if (!req.user) {
     res.status(401).json({ error: 'Not authenticated' });
@@ -155,6 +238,7 @@ function requireAuth(req, res, next) {
 module.exports = {
   COOKIE_NAME,
   SESSION_MAX_AGE_DAYS,
+  TOKEN_PREFIX,
   hashPassword,
   verifyPassword,
   newSessionToken,
@@ -163,5 +247,12 @@ module.exports = {
   clearSessionCookie,
   cookieMiddleware,
   loadSession,
-  requireAuth
+  loadBearerToken,
+  requireAuth,
+  // api tokens
+  initApiTokenPepper,
+  newApiToken,
+  hashApiToken,
+  isApiToken,
+  parseBearer
 };

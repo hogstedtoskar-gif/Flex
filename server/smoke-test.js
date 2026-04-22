@@ -16,7 +16,10 @@
  *   5. PUT empty day -> verify it gets pruned (204)
  *   6. PUT /api/state (import), verify
  *   7. POST /api/reset, verify empty
- *   8. logout -> /api/state 401
+ *   8. API tokens: create/list/use/revoke + bearer scope enforcement
+ *   9. Quick actions: clock-in / lunch-toggle / clock-out state machine
+ *  10. PWA assets: manifest + service worker are reachable
+ *  11. logout -> /api/state 401
  */
 
 const BASE = process.env.BASE || 'http://127.0.0.1:8787';
@@ -33,9 +36,10 @@ function assert(cond, msg) {
   else { failed++; console.error('  ✗ ' + msg); }
 }
 
-async function req(method, path, body) {
+async function req(method, path, body, extraHeaders) {
   const init = { method, headers: { Accept: 'application/json' } };
   if (cookieJar) init.headers.Cookie = cookieJar;
+  if (extraHeaders) Object.assign(init.headers, extraHeaders);
   if (body !== undefined) {
     init.headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(body);
@@ -150,7 +154,80 @@ async function main() {
   assert(r.status === 400, 'bad date -> 400');
   assert(r.data && /Invalid date key/.test(r.data.error), 'bad date error message');
 
-  console.log('\n[8] Reset + logout');
+  console.log('\n[8] API tokens + bearer scope');
+  // Fresh slate so the state-machine tests start clean.
+  r = await req('POST', '/api/reset');
+  assert(r.status === 200, 'pre-tokens reset -> 200');
+
+  r = await req('POST', '/api/auth/tokens', { label: 'smoke widget' });
+  assert(r.status === 201, 'create token -> 201');
+  assert(r.data && typeof r.data.token === 'string' && r.data.token.startsWith('ttk_'), 'token has ttk_ prefix');
+  const token = r.data.token;
+  const tokenId = r.data.id;
+
+  r = await req('GET', '/api/auth/tokens');
+  assert(r.status === 200 && Array.isArray(r.data.tokens) && r.data.tokens.length >= 1, 'list tokens');
+  assert(r.data.tokens.find((t) => t.id === tokenId && t.label === 'smoke widget'), 'created token is in list');
+  // Tokens list must never leak plaintext.
+  assert(!JSON.stringify(r.data).includes(token), 'list does not leak plaintext');
+
+  const savedCookie = cookieJar;
+  cookieJar = '';
+
+  r = await req('GET', '/api/auth/me', undefined, { Authorization: 'Bearer ' + token });
+  assert(r.status === 401, 'bearer token cannot access /auth/me');
+
+  r = await req('POST', '/api/auth/tokens', { label: 'x' }, { Authorization: 'Bearer ' + token });
+  assert(r.status === 401 || r.status === 403, 'bearer token cannot create more tokens');
+
+  r = await req('GET', '/api/state', undefined, { Authorization: 'Bearer ' + token });
+  assert(r.status === 401, 'bearer token cannot read /api/state');
+
+  console.log('\n[9] Quick state machine (via bearer token)');
+  r = await req('GET', '/api/quick/status', undefined, { Authorization: 'Bearer ' + token });
+  assert(r.status === 200, 'GET /quick/status (bearer) -> 200');
+  assert(r.data.state === 'off', 'initial state is off');
+
+  r = await req('POST', '/api/quick/clock-in?tz=UTC&time=08:00', undefined, { Authorization: 'Bearer ' + token });
+  assert(r.status === 200 && r.data.state === 'working', 'clock-in -> working');
+
+  r = await req('POST', '/api/quick/clock-in?tz=UTC&time=08:05', undefined, { Authorization: 'Bearer ' + token });
+  assert(r.status === 409, 'double clock-in -> 409');
+
+  r = await req('POST', '/api/quick/lunch-toggle?tz=UTC&time=12:00', undefined, { Authorization: 'Bearer ' + token });
+  assert(r.status === 200 && r.data.state === 'lunch', 'lunch-toggle from working -> lunch');
+
+  r = await req('POST', '/api/quick/lunch-toggle?tz=UTC&time=12:30', undefined, { Authorization: 'Bearer ' + token });
+  assert(r.status === 200 && r.data.state === 'working', 'lunch-toggle from lunch -> working');
+
+  r = await req('POST', '/api/quick/clock-out?tz=UTC&time=17:00', undefined, { Authorization: 'Bearer ' + token });
+  assert(r.status === 200 && r.data.state === 'off', 'clock-out -> off');
+  assert(r.data.today && r.data.today.workedHours >= 8, 'worked hours computed');
+
+  r = await req('POST', '/api/quick/clock-out?tz=UTC&time=18:00', undefined, { Authorization: 'Bearer ' + token });
+  assert(r.status === 409, 'double clock-out -> 409');
+
+  console.log('\n[10] PWA assets reachable');
+  r = await req('GET', '/manifest.webmanifest');
+  assert(r.status === 200, 'manifest.webmanifest -> 200');
+  assert(r.data && (r.data.start_url || (typeof r.data === 'string' && r.data.includes('start_url'))), 'manifest has start_url');
+  r = await req('GET', '/sw.js');
+  assert(r.status === 200 && typeof r.data === 'string' && r.data.includes('CACHE_VERSION'), 'sw.js reachable and looks right');
+  r = await req('GET', '/icons/icon.svg');
+  assert(r.status === 200, 'icon.svg -> 200');
+
+  // Revoke + confirm bearer no longer works.
+  cookieJar = savedCookie;
+  r = await req('DELETE', '/api/auth/tokens/' + tokenId);
+  assert(r.status === 204, 'revoke token -> 204');
+  cookieJar = '';
+  r = await req('POST', '/api/quick/clock-in?tz=UTC&time=09:00', undefined, { Authorization: 'Bearer ' + token });
+  assert(r.status === 401, 'revoked token -> 401');
+
+  // Restore session for the remaining tests.
+  cookieJar = savedCookie;
+
+  console.log('\n[11] Reset + logout');
   r = await req('POST', '/api/reset');
   assert(r.status === 200, 'reset -> 200');
   assert(r.data && Object.keys(r.data.days).length === 0, 'days empty after reset');

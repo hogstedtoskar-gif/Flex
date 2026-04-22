@@ -9,6 +9,8 @@
  *   user_settings  (user_id PRIMARY KEY, value JSON)
  *   days           (user_id, date, note, entries JSON, updated_at)
  *                  PRIMARY KEY (user_id, date)
+ *   api_tokens     (id, user_id, token_hash, label, created_at, last_used_at)
+ *                  Long-lived bearer tokens for the phone-widget endpoints.
  *
  * Old single-user databases (schema with plain `days.date` PK and a
  * global `meta.settings` row) are migrated on first open: a bootstrap
@@ -268,6 +270,47 @@ function open(dbPath) {
     });
   }
 
+  /* ---------------- api tokens ---------------- */
+
+  function createApiToken(userId, tokenHash, label) {
+    const safeLabel = (label && String(label).slice(0, 64)) || 'widget';
+    const info = stmts.insertApiToken.run(userId, tokenHash, safeLabel);
+    return {
+      id: Number(info.lastInsertRowid),
+      label: safeLabel
+    };
+  }
+
+  function listApiTokens(userId) {
+    return stmts.listApiTokensForUser.all(userId).map((r) => ({
+      id: r.id,
+      label: r.label,
+      created_at: r.created_at,
+      last_used_at: r.last_used_at
+    }));
+  }
+
+  function deleteApiToken(userId, id) {
+    const info = stmts.deleteApiToken.run(id, userId);
+    return info.changes > 0;
+  }
+
+  function deleteApiTokensForUser(userId) {
+    stmts.deleteApiTokensForUser.run(userId);
+  }
+
+  // Called by auth middleware to resolve a bearer token to a user row.
+  // We look up by hash (hashes are deterministic because tokens are
+  // high-entropy, so we don't need a per-row salt). See auth.js for
+  // the HMAC-SHA-256 based scheme.
+  function getUserByApiTokenHash(tokenHash) {
+    const row = stmts.apiTokenByHash.get(tokenHash);
+    if (!row) return null;
+    // Touch last_used_at so the user can see which tokens are active.
+    stmts.touchApiToken.run(row.token_id);
+    return { id: row.user_id, username: row.username, token_id: row.token_id };
+  }
+
   return {
     db,
     DEFAULT_SETTINGS,
@@ -292,7 +335,13 @@ function open(dbPath) {
     setDay,
     deleteDay,
     replaceAll,
-    resetUser
+    resetUser,
+    // api tokens
+    createApiToken,
+    listApiTokens,
+    deleteApiToken,
+    deleteApiTokensForUser,
+    getUserByApiTokenHash
   };
 }
 
@@ -319,6 +368,16 @@ function ensureSchema(db) {
       value   TEXT NOT NULL,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
+    CREATE TABLE IF NOT EXISTS api_tokens (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id      INTEGER NOT NULL,
+      token_hash   TEXT NOT NULL UNIQUE,
+      label        TEXT NOT NULL DEFAULT 'widget',
+      created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      last_used_at TEXT,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id);
   `);
 
   // The `days` table may exist in legacy form (PK on date only, no user_id).
@@ -508,6 +567,29 @@ function prepareStatements(db) {
     ),
     deleteAllDaysForUser: db.prepare(
       'DELETE FROM days WHERE user_id = ?'
+    ),
+
+    // api tokens
+    insertApiToken: db.prepare(
+      'INSERT INTO api_tokens (user_id, token_hash, label) VALUES (?, ?, ?)'
+    ),
+    listApiTokensForUser: db.prepare(
+      'SELECT id, label, created_at, last_used_at FROM api_tokens WHERE user_id = ? ORDER BY id DESC'
+    ),
+    deleteApiToken: db.prepare(
+      'DELETE FROM api_tokens WHERE id = ? AND user_id = ?'
+    ),
+    deleteApiTokensForUser: db.prepare(
+      'DELETE FROM api_tokens WHERE user_id = ?'
+    ),
+    apiTokenByHash: db.prepare(`
+      SELECT t.id AS token_id, t.user_id, u.username
+      FROM api_tokens t
+      JOIN users u ON u.id = t.user_id
+      WHERE t.token_hash = ?
+    `),
+    touchApiToken: db.prepare(
+      "UPDATE api_tokens SET last_used_at = datetime('now') WHERE id = ?"
     )
   };
 }
