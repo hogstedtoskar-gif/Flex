@@ -278,6 +278,14 @@
             <input type="number" name="defaultLunchMinutes" min="0" max="240" step="5" />
           </label>
           <label>
+            <span>Minimum lunch (minutes) <em class="muted small">(0 = off)</em></span>
+            <input type="number" name="minLunchMinutes" min="0" max="240" step="5" />
+          </label>
+          <label>
+            <span>Auto-lunch threshold (hours) <em class="muted small">(deduction applies only when worked exceeds this)</em></span>
+            <input type="number" name="lunchThresholdHours" min="0" max="24" step="0.25" />
+          </label>
+          <label>
             <span>Opening flex balance (hours)</span>
             <input type="number" name="flexOpeningBalance" step="0.25" />
           </label>

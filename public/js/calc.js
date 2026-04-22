@@ -168,10 +168,36 @@ const Calc = (() => {
         lunchMin += entryMinutes(e);
       }
     }
-    const workedHours = minutesToHours(workedMin);
-    const inOfficeHours = minutesToHours(inOfficeMin);
-    const outsideHours = Math.max(0, workedHours - inOfficeHours);
+    const workedHoursRaw = minutesToHours(workedMin);
+    const inOfficeHoursRaw = minutesToHours(inOfficeMin);
+    const outsideHoursRaw = Math.max(0, workedHoursRaw - inOfficeHoursRaw);
     const lunchHours = minutesToHours(lunchMin);
+
+    // Auto-deduct: when the day's worked time exceeds the threshold and
+    // the recorded lunch is shorter than the configured minimum, take
+    // the shortfall out of worked time (in-office first, outside only
+    // if nothing else is left). Configure via minLunchMinutes (0 = off)
+    // and lunchThresholdHours.
+    const minLunchHours = Math.max(0, (settings.minLunchMinutes || 0) / 60);
+    const lunchThreshold = Number.isFinite(settings.lunchThresholdHours)
+      ? settings.lunchThresholdHours
+      : 6;
+    let lunchDeduction = 0;
+    if (minLunchHours > 0 && workedHoursRaw > lunchThreshold && lunchHours < minLunchHours) {
+      lunchDeduction = minLunchHours - lunchHours;
+    }
+    let inOfficeHours = inOfficeHoursRaw;
+    let outsideHours = outsideHoursRaw;
+    if (lunchDeduction > 0) {
+      const fromInOffice = Math.min(lunchDeduction, inOfficeHours);
+      inOfficeHours -= fromInOffice;
+      const remaining = lunchDeduction - fromInOffice;
+      if (remaining > 0) {
+        outsideHours = Math.max(0, outsideHours - remaining);
+      }
+    }
+    const workedHours = inOfficeHours + outsideHours;
+
     const daily = settings.regularHoursPerDay;
     const regular = Math.min(inOfficeHours, daily);
     const extraInOffice = Math.max(0, inOfficeHours - daily);
@@ -180,9 +206,11 @@ const Calc = (() => {
     const shortfall = Math.max(0, daily - inOfficeHours);
     return {
       workedHours,
+      workedHoursRaw,
       inOfficeHours,
       outsideHours,
       lunchHours,
+      lunchDeduction,
       regular,
       extra,
       extraInOffice,

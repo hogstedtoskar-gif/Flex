@@ -36,6 +36,12 @@ const DEFAULT_SETTINGS = {
   overtimePeriodStart: todayKey(),
   overtimePeriodWeeks: 4,
   defaultLunchMinutes: 30,
+  // Auto-deduct lunch: when worked hours exceed lunchThresholdHours
+  // and the recorded lunch is less than minLunchMinutes, the missing
+  // lunch time is deducted from worked hours. Set minLunchMinutes to
+  // 0 to disable.
+  minLunchMinutes: 30,
+  lunchThresholdHours: 6,
   flexOpeningBalance: 0,
   flexOpeningDate: '',
   // Office hours window: work outside this range cannot become regular

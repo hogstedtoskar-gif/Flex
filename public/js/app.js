@@ -244,6 +244,13 @@
       ));
     }
     todayTotals.appendChild(UI.stat('Lunch', Calc.formatHours(c.lunchHours)));
+    if (c.lunchDeduction > 0) {
+      todayTotals.appendChild(UI.stat(
+        'Auto-lunch',
+        '−' + Calc.formatHours(c.lunchDeduction),
+        'negative'
+      ));
+    }
 
     const wsDate = Calc.weekStart(today, settings.weekStartDay);
     const week = Calc.computeWeek(wsDate, App.state.days, settings);
@@ -566,6 +573,13 @@
       ));
     }
     summaryEl.appendChild(UI.stat('Lunch', Calc.formatHours(c.lunchHours)));
+    if (c.lunchDeduction > 0) {
+      summaryEl.appendChild(UI.stat(
+        'Auto-lunch',
+        '−' + Calc.formatHours(c.lunchDeduction),
+        'negative'
+      ));
+    }
 
     const validation = Calc.validateDay(day.entries || []);
     const validationEl = view.querySelector('[data-diary-validation]');
@@ -595,6 +609,19 @@
           + (settings.officeEnd || '') + '): '
           + Calc.formatHours(c.outsideHours, { compact: true })
           + ' — counts toward overtime only, never regular or flex.'
+      }));
+    }
+    if (c.lunchDeduction > 0) {
+      validationEl.appendChild(UI.el('div', {
+        class: 'alert alert-warning',
+        text: 'Auto-lunch deduction: '
+          + Calc.formatHours(c.lunchDeduction, { compact: true })
+          + ' removed from worked time. Recorded lunch ('
+          + Calc.formatHours(c.lunchHours, { compact: true })
+          + ') is below the '
+          + (settings.minLunchMinutes || 30) + '-minute minimum for a '
+          + Calc.formatHours(c.workedHoursRaw, { compact: true })
+          + ' work day.'
       }));
     }
 
@@ -866,6 +893,8 @@
     form.elements['overtimePeriodStart'].value = s.overtimePeriodStart || '';
     form.elements['overtimePeriodWeeks'].value = s.overtimePeriodWeeks;
     form.elements['defaultLunchMinutes'].value = s.defaultLunchMinutes;
+    form.elements['minLunchMinutes'].value = s.minLunchMinutes != null ? s.minLunchMinutes : 30;
+    form.elements['lunchThresholdHours'].value = s.lunchThresholdHours != null ? s.lunchThresholdHours : 6;
     form.elements['flexOpeningBalance'].value = s.flexOpeningBalance || 0;
     form.elements['flexOpeningDate'].value = s.flexOpeningDate || '';
 
@@ -886,6 +915,8 @@
         overtimePeriodStart: f['overtimePeriodStart'].value,
         overtimePeriodWeeks: parseInt(f['overtimePeriodWeeks'].value, 10) || 0,
         defaultLunchMinutes: parseInt(f['defaultLunchMinutes'].value, 10) || 0,
+        minLunchMinutes: parseInt(f['minLunchMinutes'].value, 10) || 0,
+        lunchThresholdHours: parseFloat(f['lunchThresholdHours'].value) || 0,
         flexOpeningBalance: parseFloat(f['flexOpeningBalance'].value) || 0,
         flexOpeningDate: f['flexOpeningDate'].value || '',
         officeStart: officeStart,

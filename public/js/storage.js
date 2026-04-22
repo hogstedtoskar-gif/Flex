@@ -16,6 +16,8 @@ const Storage = (() => {
     overtimePeriodStart: Calc.toDateKey(new Date()),
     overtimePeriodWeeks: 4,
     defaultLunchMinutes: 30,
+    minLunchMinutes: 30,
+    lunchThresholdHours: 6,
     flexOpeningBalance: 0,
     flexOpeningDate: '',
     officeStart: '07:30',
@@ -239,7 +241,7 @@ const Storage = (() => {
       'Date', 'Weekday', 'Worked (h)', 'In Office (h)', 'Outside (h)',
       'Regular (h)', 'Extra (h)',
       'Overtime (h)', 'Flex gain (h)', 'Outside unused (h)',
-      'Shortfall (h)', 'Lunch (h)',
+      'Shortfall (h)', 'Lunch (h)', 'Auto-lunch deduction (h)',
       'In Period', 'Segments', 'Note'
     ]];
 
@@ -286,6 +288,7 @@ const Storage = (() => {
         alloc.outsideUnused.toFixed(2),
         c.shortfall.toFixed(2),
         c.lunchHours.toFixed(2),
+        (c.lunchDeduction || 0).toFixed(2),
         alloc.inPeriod ? 'yes' : 'no',
         segStr,
         (day.note || '').replace(/\r?\n/g, ' ')

@@ -186,8 +186,9 @@ All `/api/*` endpoints except the ones marked *public* require the `tt_session` 
 ## How overtime & flex are computed
 
 1. Per day, with an office window `[officeStart, officeEnd]` configured (default `07:30`–`17:30`):
-   - `worked = sum(work segments)` (lunch never counts).
+   - `workedRaw = sum(work segments)` (lunch segments never count).
    - Each work segment is split into in-office minutes (overlap with the window) and outside-office minutes.
+   - **Auto-lunch deduction**: if `workedRaw > lunchThresholdHours` (default `6h`) and the recorded lunch is shorter than `minLunchMinutes` (default `30` min), the missing break time is deducted from worked hours — in-office first, outside only if nothing else is left. Set `minLunchMinutes` to `0` to disable.
    - `regular = min(inOffice, dailyHours)` — only in-office time can earn regular hours.
    - `extraInOffice = max(0, inOffice - dailyHours)` — over-target in-office hours, eligible for overtime or flex.
    - `extraOutside = outside` — all outside-office hours, eligible for overtime **only**.
@@ -212,6 +213,8 @@ Configurable in the Settings view:
 | Overtime period start | First day of the ordered-overtime period |
 | Overtime period length | Number of weeks the overtime order applies |
 | Default lunch | Informational default (currently used as a reference only) |
+| Minimum lunch (minutes) | Auto-deduct the missing break from worked hours when the threshold is exceeded. `0` disables the rule. |
+| Auto-lunch threshold (hours) | Daily worked time above which the minimum-lunch rule kicks in (default `6h`). |
 | Opening flex balance | Starting flex (hours) added on top of computed weeks |
 | Opening flex as of | Optional cutoff date — weeks up to this date are not double-counted |
 
