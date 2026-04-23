@@ -84,6 +84,9 @@
     if (tabs) tabs.toggleAttribute('hidden', !App.user);
     if (badge) badge.toggleAttribute('hidden', !App.user);
     if (name) name.textContent = App.user ? App.user.username : '';
+    // Used by the mobile bottom-nav CSS to reserve body padding only
+    // when the tabs are actually showing (i.e. after login).
+    document.body.classList.toggle('has-tabs', !!App.user);
   }
 
   /* =========================================================

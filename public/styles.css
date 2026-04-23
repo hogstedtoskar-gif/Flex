@@ -959,3 +959,265 @@ table.data-table {
   body.pwa-quick-only .view-root { padding: 16px; }
 }
 
+/* ============================================================
+   Mobile optimization
+   ------------------------------------------------------------
+   Everything below this line is opt-in at narrower widths and
+   leaves the desktop layout untouched. The phone experience:
+   - topbar keeps brand + user, tabs move to a fixed bottom nav
+   - inputs are >= 16px to stop iOS auto-zoom on focus
+   - buttons honour ~44px minimum touch targets
+   - diary entry rows stack vertically instead of overflowing
+   - data tables horizontally scroll instead of being crushed
+   - toasts sit above the nav, respecting iPhone safe areas
+   ============================================================ */
+
+/* Tap hygiene: no blue tap highlight, no 300ms tap delay. */
+html {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+}
+
+button, .btn, .tab, a, select, summary, [role="button"] {
+  touch-action: manipulation;
+}
+
+/* Keyboard-focus affordance on desktop (doesn't fire on touch). */
+.btn:focus-visible,
+.tab:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+.quick-btn:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* Safe-area insets: the topbar and main view pad out to the notch /
+   side insets when launched as a PWA in landscape on iPhone. */
+.topbar {
+  padding-top: max(12px, env(safe-area-inset-top));
+  padding-left: max(24px, env(safe-area-inset-left));
+  padding-right: max(24px, env(safe-area-inset-right));
+}
+.view-root {
+  padding-left: max(24px, env(safe-area-inset-left));
+  padding-right: max(24px, env(safe-area-inset-right));
+}
+
+/* Summary tables become horizontally scrollable (inside their card)
+   instead of forcing the whole page to widen. The min-width kicks in
+   only when the viewport is narrower than the table's natural size. */
+[data-week-table],
+[data-month-table] {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 0 -4px;
+  padding: 0 4px;
+}
+
+/* Prevent iOS from auto-zooming when focusing any form field. The
+   trigger is font-size < 16px, which several of our 13/14px fields
+   would hit. Only applied on phone-ish widths to keep the desktop
+   density the user set out to build. */
+@media (max-width: 640px) {
+  input[type="text"],
+  input[type="password"],
+  input[type="number"],
+  input[type="date"],
+  input[type="week"],
+  input[type="month"],
+  input[type="time"],
+  input[type="search"],
+  input[type="email"],
+  input.time24,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+  .data-table { min-width: 560px; }
+}
+
+/* -------- Phone layout (<= 640px) -------- */
+@media (max-width: 640px) {
+  html, body { font-size: 15px; }
+
+  .view-root {
+    padding: 14px;
+    padding-bottom: calc(14px + env(safe-area-inset-bottom));
+  }
+
+  /* Topbar: just brand + user badge. Clock is ornamental; hide it. */
+  .topbar {
+    gap: 10px;
+    padding: 8px 12px;
+    padding-left: max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
+  }
+  .brand-name { font-size: 14px; }
+  .clock { display: none; }
+  .topbar-right { margin-left: auto; }
+  .user-badge {
+    padding-left: 8px;
+    margin-left: 0;
+  }
+  .user-name { max-width: 100px; }
+
+  /* Tabs -> fixed bottom navigation. Out of the flex flow, so the
+     flex:1 spacing rules on `.tabs` no longer apply. */
+  .tabs {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    z-index: 20;
+    gap: 0;
+    background: var(--bg-elevated);
+    border-top: 1px solid var(--border);
+    padding: 4px 4px calc(4px + env(safe-area-inset-bottom));
+    box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.25);
+    justify-content: space-around;
+  }
+  .tab {
+    flex: 1 1 0;
+    padding: 10px 4px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text-muted);
+    border-radius: 0;
+    text-align: center;
+    min-height: 44px;
+  }
+  .tab:hover { background: transparent; color: var(--text); }
+  .tab.active {
+    background: transparent;
+    color: var(--primary);
+    box-shadow: inset 0 2px 0 var(--primary);
+  }
+
+  /* Reserve space under the content for the fixed nav (but only
+     when the tabs are actually visible -- the login/register view
+     has no tabs, so we keep the screen tall for the form). */
+  body.has-tabs {
+    padding-bottom: calc(56px + env(safe-area-inset-bottom));
+  }
+
+  /* Cards: tighter, headers wrap so the date-picker controls on
+     Diary / Summary / Quick don't shove the title off the right. */
+  .card { padding: 14px; }
+  .card-header {
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .card-header h2 { font-size: 13px; }
+  .grid-2 { gap: 14px; }
+
+  /* Buttons -> ~44px min touch targets. */
+  .btn { padding: 10px 14px; font-size: 14px; min-height: 40px; }
+  .btn-lg { padding: 14px 18px; font-size: 16px; min-height: 52px; }
+  .btn-sm { padding: 6px 10px; font-size: 12px; min-height: 32px; }
+  .btn-ghost { padding: 10px; }
+
+  /* Dashboard actions: 2x2 grid feels natural for four big actions. */
+  .actions { grid-template-columns: 1fr 1fr; gap: 8px; }
+
+  /* Stats rows: always two columns on a phone. */
+  .today-totals, .week-totals, .diary-day-summary, .quick-totals {
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .stat { padding: 8px 10px; }
+  .stat-value { font-size: 18px; }
+  .stat-label { font-size: 10px; }
+
+  /* Diary date controls / summary pickers wrap instead of overflowing. */
+  .diary-controls {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  /* Diary entry rows: stack into a compact 2-column layout.
+     Row 1: type selector (full width)
+     Row 2: start | end
+     Row 3: duration | delete */
+  .entry-row {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "type    type"
+      "start   end"
+      "dur     act";
+    gap: 8px;
+    padding: 12px;
+  }
+  .entry-row > select                { grid-area: type; width: 100%; min-height: 40px; }
+  .entry-row > input:nth-of-type(1)  { grid-area: start; min-height: 40px; }
+  .entry-row > input:nth-of-type(2)  { grid-area: end;   min-height: 40px; }
+  .entry-row > .entry-duration       { grid-area: dur; text-align: left; font-size: 13px; }
+  .entry-row > .entry-actions        { grid-area: act; justify-content: flex-end; }
+  .entry-actions .btn { padding: 8px 14px; font-size: 13px; min-height: 36px; }
+
+  /* Manual entry: forcibly single-column (the existing rule kicks in
+     only at <=520px; extend it to all phones). */
+  .manual-form { grid-template-columns: 1fr; }
+
+  /* Chart rows: label above the bar, legend underneath. */
+  .chart-row {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+    gap: 4px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .chart-row:last-child { border-bottom: none; }
+  .chart-row > :nth-child(1) { font-weight: 600; font-size: 12px; }
+  .chart-row > .chart-bar    { height: 16px; }
+  .chart-row > :nth-child(3) { font-size: 11px; color: var(--text-dim); }
+
+  /* Data tables: slightly smaller text; combined with [data-*-table]
+     overflow-x above, long tables become horizontally scrollable. */
+  .data-table { font-size: 12px; }
+  .data-table th, .data-table td { padding: 6px 8px; }
+
+  /* Big numbers trim on phone. */
+  .period-summary .big { font-size: 26px; }
+  .flex-display .big { font-size: 30px; }
+
+  /* Toasts: centered above the bottom nav, not bottom-right. */
+  .toast-root {
+    left: 12px;
+    right: 12px;
+    bottom: calc(64px + env(safe-area-inset-bottom));
+  }
+  .toast { width: 100%; text-align: center; font-size: 14px; }
+  /* If the tabs are hidden (login view), drop the toast back down. */
+  body:not(.has-tabs) .toast-root {
+    bottom: calc(16px + env(safe-area-inset-bottom));
+  }
+
+  /* Login view: a little breathing room above the form. */
+  .view-login { padding: 20px 8px; }
+
+  /* Tokens UI: reveal box looks better full-width on phone. */
+  .tokens-reveal-value { font-size: 11px; padding: 10px 12px; }
+  .tokens-reveal-row { flex-direction: column; align-items: stretch; }
+  .tokens-reveal-row .btn { align-self: flex-end; }
+}
+
+/* -------- Extra-narrow phones (~iPhone SE) -------- */
+@media (max-width: 380px) {
+  .brand-name { display: none; } /* dot-only brand on tiny screens */
+  .tab { font-size: 10px; padding: 10px 2px; }
+  .today-totals, .week-totals, .diary-day-summary, .quick-totals {
+    grid-template-columns: 1fr;
+  }
+  .actions { grid-template-columns: 1fr; }
+  .period-summary { flex-direction: column; align-items: flex-start; gap: 4px; }
+}
+
+/* -------- Standalone PWA polish -------- */
+@media (display-mode: standalone) and (max-width: 640px) {
+  /* Inside an installed PWA on iOS, the status bar lives under the
+     topbar; add a bit more vertical breathing room. */
+  .topbar { padding-top: max(14px, env(safe-area-inset-top)); }
+}
+
