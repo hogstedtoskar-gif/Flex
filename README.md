@@ -221,6 +221,40 @@ interactive widget that groups several shortcuts.
 
 Tip: put the three shortcuts in a *Stack* on the home screen to save space.
 
+### iOS — "Status" shortcut (read-only)
+
+If you also want a one-tap shortcut that just *tells you* whether you're currently
+clocked in, on lunch, or off — and since when — build a second shortcut against the
+`GET /api/quick/status` endpoint. It reuses the same `ttk_…` token; no new token is
+needed.
+
+1. Open <b>Shortcuts</b> → <b>+</b> (new shortcut).
+2. Add <b>Get contents of URL</b>:
+   - URL: `https://your-server/api/quick/status`.
+   - Tap <b>Show More</b> → Method: <b>GET</b>.
+   - Headers: add <code>Authorization</code> = <code>Bearer ttk_…</code>.
+3. Add <b>Get Dictionary from Input</b> (parses the JSON response).
+4. Add <b>Get Dictionary Value</b> → Key: `state` → store in a variable named `State`
+   (use the <b>Set Variable</b> action right after).
+5. Add another <b>Get Dictionary Value</b> on the same dictionary → Key: `since` →
+   store in a variable named `Since`.
+6. Add an <b>If</b> action with condition `State` <i>is</i> `working`:
+   - Inside <b>If</b>: <b>Text</b> action with `Clocked in since [Since]`.
+   - Add <b>Otherwise If</b> with condition `State` <i>is</i> `lunch`:
+     - <b>Text</b> action with `On lunch since [Since]`.
+   - <b>Otherwise</b>: <b>Text</b> action with `Clocked out`.
+   - End If.
+7. Add <b>Show Notification</b> (or <b>Show Result</b> / <b>Speak Text</b>) with the
+   text from the If block as input.
+8. Rename the shortcut (e.g. "Status"), tap <b>Done</b>.
+
+Place it on the home screen the same way as the action shortcuts (long-press →
+<b>Edit</b> → <b>+</b> → <b>Shortcuts</b> widget). It pairs nicely with the Clock in
+/ Clock out / Toggle lunch shortcuts in an iOS 17+ interactive widget stack.
+
+Because this call is a plain `GET`, it is covered by the same 30 req / 60 s per-token
+rate limit as the action endpoints — safe to refresh often.
+
 ### Android — HTTP Shortcuts widget
 
 The open-source [HTTP Shortcuts](https://http-shortcuts.rmy.ch/) app (F-Droid / Play
@@ -250,7 +284,7 @@ Optional query (or JSON body) parameters let the widget pass the phone's clock/t
 
 | Method | Path | Behaviour |
 |---|---|---|
-| `GET` | `/api/quick/status` | Current `state` (`off`/`working`/`lunch`), `since`, and `today` totals |
+| `GET` | `/api/quick/status` | Current `state` (`off`/`working`/`lunch`). `since` is the `HH:MM` of the currently open segment (or `null` when `state` is `off`), plus `today` totals |
 | `POST` | `/api/quick/clock-in` | Start a new work segment. 409 if already clocked in |
 | `POST` | `/api/quick/clock-out` | Close the open work segment. 409 if not working |
 | `POST` | `/api/quick/lunch-toggle` | Start lunch if working; end lunch (resume work) if on lunch |
