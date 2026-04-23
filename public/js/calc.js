@@ -153,6 +153,22 @@ const Calc = (() => {
   function computeDay(day, settings) {
     const entries = (day && day.entries) || [];
     const window = officeWindow(settings);
+    // Days with zero recorded entries are treated as "not tracked", not
+    // as "you owe the full daily target". This keeps weekends, holidays,
+    // vacation, sick days, and future days from dragging the weekly
+    // flexNet and the all-time flex balance into a big negative.
+    // Days that ARE recorded but fall short of the target still count
+    // (shortfall is real in that case).
+    if (entries.length === 0) {
+      return {
+        workedHours: 0, workedHoursRaw: 0,
+        inOfficeHours: 0, outsideHours: 0,
+        lunchHours: 0, lunchDeduction: 0,
+        regular: 0, extra: 0, extraInOffice: 0, extraOutside: 0,
+        shortfall: 0, hasOpen: false,
+        officeEnforced: !!window
+      };
+    }
     let workedMin = 0;
     let inOfficeMin = 0;
     let lunchMin = 0;
