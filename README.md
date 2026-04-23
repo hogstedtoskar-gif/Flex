@@ -332,7 +332,7 @@ widget. Revoking a token is immediate.
    - Inside the overtime period, the weekly overtime target is filled from `extraOutside` **first** (use-it-or-lose-it — outside hours can never become flex), then from `extraInOffice`. Any leftover `extraInOffice` becomes `flex gain`. Any leftover `extraOutside` is counted as `outsideUnused` and is discarded.
    - Outside the overtime period, all `extraInOffice` becomes flex gain and all `extraOutside` is discarded.
    - `flex net = flex gain - shortfall`.
-3. The all-time **flex balance** is the configured opening balance plus the sum of `flex net` across every week with recorded data.
+3. The all-time **flex balance** is the configured opening balance plus `flex gain − shortfall` summed over every *recorded* day (days with no entries never contribute, so weekends and future days don't sink the balance). If **Opening flex applies from** is set, only days on or after that date contribute.
 
 ## Settings
 
@@ -349,8 +349,8 @@ Configurable in the Settings view:
 | Default lunch | Informational default (currently used as a reference only) |
 | Minimum lunch (minutes) | Auto-deduct the missing break from worked hours when the threshold is exceeded. `0` disables the rule. |
 | Auto-lunch threshold (hours) | Daily worked time above which the minimum-lunch rule kicks in (default `6h`). |
-| Opening flex balance | Starting flex (hours) added on top of computed weeks |
-| Opening flex as of | Optional cutoff date — weeks up to this date are not double-counted |
+| Opening flex balance | Your flex balance at the start of "applies from" (e.g. imported from a previous tool) |
+| Opening flex applies from | Flex earned on this date and later is summed on top of the opening balance. Days before this date do not contribute (they're assumed to be rolled up in the opening value). Leave blank to sum every recorded day. |
 
 ## Backups
 

@@ -358,11 +358,21 @@ const Calc = (() => {
   }
 
   /**
-   * Compute cumulative flex balance across all stored days up to and including `upToDate`.
+   * Compute cumulative flex balance up to and including `upToDate`.
    *
-   * Respects settings.flexOpeningBalance (added on top) and settings.flexOpeningDate
-   * (when set, only weeks whose start is strictly after that date contribute to
-   * the computed portion, so the opening balance represents flex up to that date).
+   * Semantics:
+   *   - `flexOpeningBalance` is your flex at the START of `flexOpeningDate`
+   *     (so set the date to the first day you started tracking here; the
+   *     balance from your previous tool goes in the opening field).
+   *   - From `flexOpeningDate` onwards, each day that has at least one
+   *     recorded entry contributes `flexGain - shortfall` on top.
+   *   - Days with no entries at all never contribute (treated as not-tracked,
+   *     not as "you owe the full daily target"). This prevents weekends,
+   *     holidays, and future days from silently sinking the balance.
+   *   - If `flexOpeningDate` is blank, every recorded day contributes.
+   *
+   * Overtime allocation is still week-scoped (runs across all 7 days in a
+   * week); we just filter which days' flex contributions get *summed*.
    */
   function computeFlexBalance(daysMap, settings, upToDate) {
     const opening = parseFloat(settings.flexOpeningBalance) || 0;
@@ -374,19 +384,27 @@ const Calc = (() => {
     let cursor = weekStart(firstDate, settings.weekStartDay);
     const limit = weekEnd(lastDate, settings.weekStartDay);
 
-    let openingCutoff = null;
-    if (settings.flexOpeningDate) {
-      openingCutoff = parseDateKey(settings.flexOpeningDate);
-    }
+    const openingCutoff = settings.flexOpeningDate
+      ? parseDateKey(settings.flexOpeningDate)
+      : null;
 
     let total = opening;
     for (let i = 0; i < 520 && cursor <= limit; i++) {
-      if (openingCutoff && cursor <= openingCutoff) {
+      const weekFinish = addDays(cursor, 6);
+      // Entire week is strictly before the opening date -> already baked
+      // into the opening balance, skip it.
+      if (openingCutoff && weekFinish < openingCutoff) {
         cursor = addDays(cursor, 7);
         continue;
       }
       const w = computeWeek(cursor, daysMap, settings);
-      total += w.flexNet;
+      for (const d of w.days) {
+        if (openingCutoff && d.date < openingCutoff) continue;
+        if (d.date > lastDate) continue;
+        const hasEntries = !!(d.day && d.day.entries && d.day.entries.length);
+        if (!hasEntries) continue;
+        total += d.flexGainHours - d.computed.shortfall;
+      }
       cursor = addDays(cursor, 7);
     }
     return total;
