@@ -9,11 +9,12 @@
  *     the next time the user opens the app.
  */
 
-const CACHE_VERSION = 'tt-shell-v2';
+const CACHE_VERSION = 'tt-shell-v3';
 const SHELL_ASSETS = [
   '/',
   '/index.html',
   '/styles.css',
+  '/js/fsm.js',
   '/js/calc.js',
   '/js/storage.js',
   '/js/ui.js',
@@ -25,7 +26,14 @@ const SHELL_ASSETS = [
 
 self.addEventListener('install', (ev) => {
   ev.waitUntil(
-    caches.open(CACHE_VERSION).then((cache) => cache.addAll(SHELL_ASSETS))
+    caches.open(CACHE_VERSION)
+      .then((cache) => Promise.allSettled(
+        SHELL_ASSETS.map((url) => cache.add(url).catch((err) => {
+          // Tolerate individual asset failures so one 404 doesn't kill
+          // the whole install and strand us without an offline shell.
+          console.warn('[sw] skipped shell asset', url, err);
+        }))
+      ))
       .then(() => self.skipWaiting())
   );
 });

@@ -43,6 +43,14 @@ purgeTimer.unref();
 const app = express();
 
 app.disable('x-powered-by');
+// When running behind a reverse proxy (nginx, Caddy, Cloudflare, ...)
+// the admin should set TRUST_PROXY=1 so that req.ip reflects the real
+// client address via X-Forwarded-For instead of the proxy's own IP.
+// Without this the per-IP auth rate limiter below would throttle every
+// user together because they all share the proxy's loopback address.
+if (/^(1|true|yes|on)$/i.test(process.env.TRUST_PROXY || '')) {
+  app.set('trust proxy', true);
+}
 app.use(express.json({ limit: '5mb' }));
 app.use(auth.cookieMiddleware());
 app.use(auth.loadSession(store));
@@ -54,6 +62,82 @@ app.use((req, _res, next) => {
   }
   next();
 });
+
+/* ----------------- Auth rate limiting -----------------
+ * Login and register run scrypt, which is CPU-heavy by design, so an
+ * attacker hammering these endpoints can both DoS the box and brute
+ * force passwords. We apply a sliding-window counter keyed on BOTH the
+ * remote IP and the username. Either bucket overflowing triggers a 429.
+ *
+ * Successful attempts are NOT credited back — otherwise an attacker who
+ * knows their own good password could keep the counter at zero while
+ * probing someone else's account from a shared IP. The window expires
+ * naturally so legitimate users are never locked out for long.
+ *
+ * TODO: behind a reverse proxy, req.ip is the proxy's address unless
+ * TRUST_PROXY=1 is set (wired up above). */
+
+const authHitsByIp = new Map();
+const authHitsByUser = new Map();
+const AUTH_WINDOW_MS = 60 * 1000;
+const AUTH_MAX_PER_IP = 10;
+const AUTH_MAX_PER_USER = 5;
+
+function bumpAuthHits(map, key, max, now) {
+  const entry = map.get(key) || { count: 0, firstAt: now };
+  if (now - entry.firstAt > AUTH_WINDOW_MS) {
+    entry.count = 0;
+    entry.firstAt = now;
+  }
+  entry.count++;
+  map.set(key, entry);
+  if (entry.count > max) {
+    return Math.ceil((AUTH_WINDOW_MS - (now - entry.firstAt)) / 1000);
+  }
+  return 0;
+}
+
+function rateLimitAuth({ useIp, usernameFrom }) {
+  return function (req, res, next) {
+    const now = Date.now();
+    let retryAfter = 0;
+
+    if (useIp && req.ip) {
+      const wait = bumpAuthHits(authHitsByIp, 'ip:' + req.ip, AUTH_MAX_PER_IP, now);
+      if (wait > retryAfter) retryAfter = wait;
+    }
+
+    let username = '';
+    if (usernameFrom === 'body') {
+      const raw = req.body && req.body.username;
+      if (typeof raw === 'string') username = raw.trim().toLowerCase();
+    } else if (usernameFrom === 'user') {
+      if (req.user && req.user.username) username = String(req.user.username).trim().toLowerCase();
+    }
+    if (username) {
+      const wait = bumpAuthHits(authHitsByUser, 'user:' + username, AUTH_MAX_PER_USER, now);
+      if (wait > retryAfter) retryAfter = wait;
+    }
+
+    if (retryAfter > 0) {
+      res.setHeader('Retry-After', String(retryAfter));
+      return res.status(429).json({
+        error: `Too many attempts — try again in ${retryAfter} seconds`
+      });
+    }
+    next();
+  };
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of authHitsByIp) {
+    if (now - v.firstAt > AUTH_WINDOW_MS * 5) authHitsByIp.delete(k);
+  }
+  for (const [k, v] of authHitsByUser) {
+    if (now - v.firstAt > AUTH_WINDOW_MS * 5) authHitsByUser.delete(k);
+  }
+}, AUTH_WINDOW_MS).unref();
 
 /* ----------------- Auth API (public) ----------------- */
 
@@ -68,7 +152,7 @@ authApi.get('/me', (req, res) => {
   res.json({ user: req.user });
 });
 
-authApi.post('/login', (req, res, next) => {
+authApi.post('/login', rateLimitAuth({ useIp: true, usernameFrom: 'body' }), (req, res, next) => {
   try {
     const { username, password } = req.body || {};
     if (!username || !password) throw httpErr(400, 'username and password are required');
@@ -92,7 +176,7 @@ authApi.post('/logout', (req, res) => {
   res.status(204).end();
 });
 
-authApi.post('/change-password', auth.requireAuth, (req, res, next) => {
+authApi.post('/change-password', auth.requireAuth, rateLimitAuth({ useIp: false, usernameFrom: 'user' }), (req, res, next) => {
   try {
     const { currentPassword, newPassword } = req.body || {};
     if (!currentPassword || !newPassword) {
@@ -153,7 +237,7 @@ authApi.delete('/tokens/:id', requireSession, (req, res, next) => {
 });
 
 if (ALLOW_REGISTRATION) {
-  authApi.post('/register', (req, res, next) => {
+  authApi.post('/register', rateLimitAuth({ useIp: true, usernameFrom: 'body' }), (req, res, next) => {
     try {
       const { username, password } = req.body || {};
       if (!username || !password) throw httpErr(400, 'username and password are required');

@@ -31,6 +31,17 @@ try {
   throw err;
 }
 
+/**
+ * Default user settings.
+ *
+ * ⚠️  KEEP IN SYNC with `public/js/storage.js` (const `DEFAULT_SETTINGS`).
+ * The client seeds its local mirror from this shape before the first
+ * /api/state response returns, so a key drifting here causes the UI
+ * to briefly render with the wrong defaults on first load.
+ *
+ * `server/smoke-test.js` contains a static parity check that fails
+ * CI if the two objects diverge.
+ */
 const DEFAULT_SETTINGS = {
   weekStartDay: 1,
   regularHoursPerDay: 8,
@@ -49,7 +60,12 @@ const DEFAULT_SETTINGS = {
   // Office hours window: work outside this range cannot become regular
   // hours or flex — only overtime. Leave start/end blank to disable.
   officeStart: '07:30',
-  officeEnd: '17:30'
+  officeEnd: '17:30',
+  // Which weekdays count as working days (indexed by Date.getDay():
+  // 0=Sun, 1=Mon, ..., 6=Sat). Non-working days never earn regular
+  // hours and never contribute shortfall; worked time on them can
+  // only fill the weekly overtime target.
+  workDays: [false, true, true, true, true, true, false]
 };
 
 function todayKey() {
@@ -363,6 +379,7 @@ function ensureSchema(db) {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_sessions_last_seen ON sessions(last_seen);
     CREATE TABLE IF NOT EXISTS user_settings (
       user_id INTEGER PRIMARY KEY,
       value   TEXT NOT NULL,

@@ -628,6 +628,48 @@ table.data-table {
 
 .form-actions { grid-column: 1 / -1; }
 
+.work-days-field {
+  grid-column: 1 / -1;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px 12px;
+  background: var(--bg-elevated);
+}
+.work-days-field legend {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  color: var(--text-dim);
+  padding: 0 6px;
+}
+.work-days-field legend em {
+  text-transform: none;
+  font-style: normal;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.work-days-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-top: 6px;
+}
+.work-days-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+}
+.work-days-row input[type="checkbox"] {
+  margin: 0;
+}
+
 .data-actions {
   display: flex;
   gap: 10px;

@@ -37,6 +37,27 @@ const Calc = (() => {
   function minutesToHours(min) { return min / 60; }
 
   /**
+   * Normalise settings.workDays into a length-7 boolean array indexed by
+   * Date.getDay() (0=Sun..6=Sat). Falls back to Mon–Fri when the setting
+   * is missing or malformed (same as the default).
+   */
+  function workDaysArray(settings) {
+    const DEFAULT = [false, true, true, true, true, true, false];
+    const src = settings && settings.workDays;
+    if (!Array.isArray(src) || src.length !== 7) return DEFAULT.slice();
+    return src.map((v) => !!v);
+  }
+
+  function countWorkDays(settings) {
+    return workDaysArray(settings).reduce((n, v) => n + (v ? 1 : 0), 0);
+  }
+
+  function isWorkDay(date, settings) {
+    if (!date) return true;
+    return workDaysArray(settings)[date.getDay()];
+  }
+
+  /**
    * Compute duration for an entry. Handles open (missing end) entries as 0.
    * Supports overnight by wrap-around if end < start.
    */
@@ -118,18 +139,37 @@ const Calc = (() => {
       errors.push({ message: 'Multiple open segments (missing end time)' });
     }
 
-    // Overlap check across closed entries
-    const closed = entries
-      .filter(e => e.start && e.end && parseHM(e.start) != null && parseHM(e.end) != null)
-      .map(e => ({ id: e.id, s: parseHM(e.start), eh: parseHM(e.end) }))
-      .sort((a, b) => a.s - b.s);
+    // Overlap check across closed entries.
+    //
+    // Consistent with entryMinutes(): when `end < start` we assume the
+    // segment wraps past midnight and extend its end by +24h. For
+    // subsequent segments that start *before* the first segment began
+    // (again in wall-clock order) we project them onto the same +24h
+    // axis so they compare correctly with the wrapped segment.
+    const closedRaw = entries
+      .filter(e => e.start && e.end && parseHM(e.start) != null && parseHM(e.end) != null);
+    if (closedRaw.length > 1) {
+      const firstStart = Math.min(...closedRaw.map(e => parseHM(e.start)));
+      const closed = closedRaw.map(e => {
+        let s = parseHM(e.start);
+        let eh = parseHM(e.end);
+        if (eh < s) eh += 24 * 60;
+        // If the whole segment looks earlier than the earliest start,
+        // assume it belongs to the "next day" half of the axis.
+        if (s < firstStart && eh <= firstStart) {
+          s += 24 * 60;
+          eh += 24 * 60;
+        }
+        return { id: e.id, s, eh };
+      }).sort((a, b) => a.s - b.s);
 
-    for (let i = 1; i < closed.length; i++) {
-      if (closed[i].s < closed[i - 1].eh) {
-        errors.push({
-          id: closed[i].id,
-          message: 'Overlaps with another segment'
-        });
+      for (let i = 1; i < closed.length; i++) {
+        if (closed[i].s < closed[i - 1].eh) {
+          errors.push({
+            id: closed[i].id,
+            message: 'Overlaps with another segment'
+          });
+        }
       }
     }
 
@@ -147,12 +187,19 @@ const Calc = (() => {
    * Returns: {
    *   workedHours, inOfficeHours, outsideHours, lunchHours,
    *   regular, extra, extraInOffice, extraOutside,
-   *   shortfall, hasOpen, officeEnforced
+   *   shortfall, hasOpen, officeEnforced, isWorkDay
    * }
+   *
+   * `date` is optional but strongly recommended: it lets the function
+   * apply the per-weekday `settings.workDays` rule (non-work days never
+   * earn regular hours or create shortfall, and all worked time is
+   * re-bucketed to `extraOutside` so it can only fill the overtime
+   * target — never become flex).
    */
-  function computeDay(day, settings) {
+  function computeDay(day, settings, date) {
     const entries = (day && day.entries) || [];
     const window = officeWindow(settings);
+    const workDay = isWorkDay(date, settings);
     // Days with zero recorded entries are treated as "not tracked", not
     // as "you owe the full daily target". This keeps weekends, holidays,
     // vacation, sick days, and future days from dragging the weekly
@@ -166,7 +213,8 @@ const Calc = (() => {
         lunchHours: 0, lunchDeduction: 0,
         regular: 0, extra: 0, extraInOffice: 0, extraOutside: 0,
         shortfall: 0, hasOpen: false,
-        officeEnforced: !!window
+        officeEnforced: !!window,
+        isWorkDay: workDay
       };
     }
     let workedMin = 0;
@@ -215,16 +263,36 @@ const Calc = (() => {
     const workedHours = inOfficeHours + outsideHours;
 
     const daily = settings.regularHoursPerDay;
-    const regular = Math.min(inOfficeHours, daily);
-    const extraInOffice = Math.max(0, inOfficeHours - daily);
-    const extraOutside = outsideHours;
+    let regular, extraInOffice, extraOutside, shortfall, reportedInOffice, reportedOutside;
+    if (workDay) {
+      regular = Math.min(inOfficeHours, daily);
+      extraInOffice = Math.max(0, inOfficeHours - daily);
+      extraOutside = outsideHours;
+      shortfall = Math.max(0, daily - inOfficeHours);
+      reportedInOffice = inOfficeHours;
+      reportedOutside = outsideHours;
+    } else {
+      // Non-work day (e.g. weekend by default): worked time never
+      // becomes regular or flex, and never creates shortfall. All
+      // worked time is routed to extraOutside so it can only fill
+      // the weekly overtime target; any leftover is discarded
+      // (same treatment as "outside office hours" on a workday).
+      regular = 0;
+      extraInOffice = 0;
+      extraOutside = workedHours;
+      shortfall = 0;
+      // Surface all hours as "outside" in the per-day stats too,
+      // so the Diary view consistently labels weekend work as
+      // overtime-only rather than as regular office time.
+      reportedInOffice = 0;
+      reportedOutside = workedHours;
+    }
     const extra = extraInOffice + extraOutside;
-    const shortfall = Math.max(0, daily - inOfficeHours);
     return {
       workedHours,
       workedHoursRaw,
-      inOfficeHours,
-      outsideHours,
+      inOfficeHours: reportedInOffice,
+      outsideHours: reportedOutside,
       lunchHours,
       lunchDeduction,
       regular,
@@ -233,7 +301,8 @@ const Calc = (() => {
       extraOutside,
       shortfall,
       hasOpen,
-      officeEnforced: !!window
+      officeEnforced: !!window,
+      isWorkDay: workDay
     };
   }
 
@@ -313,7 +382,7 @@ const Calc = (() => {
       const d = addDays(weekStartDate, i);
       const key = toDateKey(d);
       const day = daysMap[key];
-      const c = computeDay(day, settings);
+      const c = computeDay(day, settings, d);
       let toOvertime = 0;
       let toFlex = 0;
       let outsideUnused = 0;
@@ -478,19 +547,69 @@ const Calc = (() => {
   /**
    * Current "state" of today based on last entry.
    * Returns 'off' | 'working' | 'lunch'.
+   *
+   * Thin wrapper around FSM.currentStatus that also reports the full
+   * lastEntry for UI code that wants to render "Last clock-out at X".
    */
   function currentStatus(day) {
     const entries = (day && day.entries) || [];
     if (!entries.length) return { state: 'off' };
-    // Find the entry without end (the open one)
     const open = entries.find(e => e.start && !e.end);
     if (open) {
       return { state: open.type === 'lunch' ? 'lunch' : 'working', openEntry: open };
     }
-    // Otherwise sort by start and look at last
     const sorted = entries.slice().sort((a, b) => (parseHM(a.start) || 0) - (parseHM(b.start) || 0));
     const last = sorted[sorted.length - 1];
     return { state: 'off', lastEntry: last };
+  }
+
+  /**
+   * Find the earliest-dated open segment in a daysMap. Delegates to
+   * FSM.findOpenAcrossDays when the shared module is loaded; falls
+   * back to a local implementation for environments where FSM isn't
+   * available (e.g. unit tests loading calc.js in isolation).
+   */
+  function findOpenAcrossDays(daysMap) {
+    if (typeof FSM !== 'undefined' && FSM.findOpenAcrossDays) {
+      return FSM.findOpenAcrossDays(daysMap);
+    }
+    if (!daysMap) return null;
+    const keys = Object.keys(daysMap).sort();
+    for (const key of keys) {
+      const d = daysMap[key];
+      const entries = (d && d.entries) || [];
+      const open = entries.find((e) => e && e.start && !e.end);
+      if (open) return { dateKey: key, entry: open };
+    }
+    return null;
+  }
+
+  /**
+   * Global status across ALL recorded days. Unlike currentStatus(day),
+   * this also finds an open segment that belongs to a previous day
+   * (e.g. you clocked in yesterday and forgot to clock out).
+   *
+   * Returns:
+   *   { state: 'off',     today, lastEntry? }
+   *   { state: 'working', today, openEntry, openDateKey }
+   *   { state: 'lunch',   today, openEntry, openDateKey }
+   */
+  function globalStatus(daysMap, todayKey) {
+    const today = (daysMap && todayKey && daysMap[todayKey]) || { entries: [] };
+    const open = findOpenAcrossDays(daysMap);
+    if (open) {
+      const type = open.entry.type === 'lunch' ? 'lunch' : 'working';
+      return {
+        state: type,
+        today,
+        openEntry: open.entry,
+        openDateKey: open.dateKey
+      };
+    }
+    // No open segment anywhere — fall back to today-only status so that
+    // "last clock-out today" still shows up nicely.
+    const t = currentStatus(today);
+    return { ...t, today, openDateKey: null };
   }
 
   /**
@@ -536,6 +655,9 @@ const Calc = (() => {
     entryOfficeSplit,
     validateDay,
     computeDay,
+    workDaysArray,
+    countWorkDays,
+    isWorkDay,
     weekStart,
     weekEnd,
     addDays,
@@ -546,6 +668,8 @@ const Calc = (() => {
     computeOvertimePeriod,
     computeMonth,
     currentStatus,
+    findOpenAcrossDays,
+    globalStatus,
     isoWeek,
     isoWeekString,
     parseIsoWeek

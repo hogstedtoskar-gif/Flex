@@ -202,7 +202,12 @@
     const todayKey = Calc.toDateKey(today);
     const day = App.state.days[todayKey];
     const settings = App.state.settings;
-    const status = Calc.currentStatus(day);
+    // Use globalStatus so an open segment that started on a PREVIOUS
+    // day (e.g. clocked in last night, never clocked out) is still
+    // recognised in the UI. This matches server/quick.js and avoids
+    // the "two open segments on two different days" bug.
+    const status = Calc.globalStatus(App.state.days, todayKey);
+    const statusOnAnotherDay = status.openDateKey && status.openDateKey !== todayKey;
 
     view.querySelector('[data-today-date]').textContent = UI.formatDate(today);
 
@@ -211,8 +216,10 @@
     let statusText = 'Not clocked in';
     if (status.state === 'working') {
       statusText = 'Working since ' + (status.openEntry.start || '?');
+      if (statusOnAnotherDay) statusText += ' on ' + status.openDateKey;
     } else if (status.state === 'lunch') {
       statusText = 'On lunch since ' + (status.openEntry.start || '?');
+      if (statusOnAnotherDay) statusText += ' on ' + status.openDateKey;
     } else if (status.lastEntry) {
       statusText = 'Last clock-out ' + (status.lastEntry.end || '?');
     }
@@ -222,7 +229,8 @@
         class: 'muted',
         'data-elapsed-ticker': '',
         'data-elapsed-start': status.openEntry.start,
-        text: formatElapsedSince(status.openEntry.start)
+        'data-elapsed-start-date': status.openDateKey || todayKey,
+        text: formatElapsedSince(status.openEntry.start, status.openDateKey, todayKey)
       }));
     } else {
       statusEl.appendChild(UI.el('span', { class: 'muted', text: '—' }));
@@ -238,12 +246,16 @@
     btnLunchStart.disabled = !(status.state === 'working');
     btnLunchEnd.disabled = !(status.state === 'lunch');
 
+    // When the open segment belongs to a previous day (e.g. clocked in
+    // last night), transitions operate on THAT day, not today, so the
+    // segment finally closes where it was opened.
+    const openKey = status.openDateKey || todayKey;
     btnIn.addEventListener('click', () => clockIn(todayKey));
-    btnOut.addEventListener('click', () => clockOut(todayKey));
-    btnLunchStart.addEventListener('click', () => lunchStart(todayKey));
-    btnLunchEnd.addEventListener('click', () => lunchEnd(todayKey));
+    btnOut.addEventListener('click', () => clockOut(openKey));
+    btnLunchStart.addEventListener('click', () => lunchStart(openKey));
+    btnLunchEnd.addEventListener('click', () => lunchEnd(openKey));
 
-    const c = Calc.computeDay(dayForLiveTotals(day, status), settings);
+    const c = Calc.computeDay(dayForLiveTotals(day, status), settings, today);
     const todayTotals = view.querySelector('[data-today-totals]');
     todayTotals.appendChild(UI.stat('Worked', Calc.formatHours(c.workedHours)));
     todayTotals.appendChild(UI.stat('Regular', Calc.formatHours(c.regular)));
@@ -299,7 +311,7 @@
     weekProgress.appendChild(UI.progressBar(
       'Regular hours',
       week.regularTotal,
-      settings.regularHoursPerDay * 5,
+      settings.regularHoursPerDay * Calc.countWorkDays(settings),
       'regular'
     ));
 
@@ -375,7 +387,7 @@
     return Calc.pad(d.getHours()) + ':' + Calc.pad(d.getMinutes());
   }
 
-  function formatElapsedSince(startHM) {
+  function formatElapsedSince(startHM, startDateKey, todayKey) {
     const start = Calc.parseHM(startHM);
     if (start == null) return '';
     const d = new Date();
@@ -383,6 +395,14 @@
     const nowSec = d.getSeconds();
     let totalSec = (nowMin - start) * 60 + nowSec;
     if (totalSec < 0) totalSec += 24 * 60 * 60;
+    // If the open segment started on a previous calendar day, add a
+    // full day for every day difference between then and today.
+    if (startDateKey && todayKey && startDateKey !== todayKey) {
+      const startDate = Calc.parseDateKey(startDateKey);
+      const nowDate = Calc.parseDateKey(todayKey);
+      const daysDiff = Math.max(0, Math.round((nowDate - startDate) / (24 * 60 * 60 * 1000)));
+      totalSec += daysDiff * 24 * 60 * 60;
+    }
     const h = Math.floor(totalSec / 3600);
     const m = Math.floor((totalSec % 3600) / 60);
     const s = totalSec % 60;
@@ -407,72 +427,94 @@
   }
 
   function clockIn(dateKey) {
-    const day = ensureDay(dateKey);
-    const status = Calc.currentStatus(day);
-    if (status.state !== 'off') {
-      UI.toast('Already clocked in', 'error');
+    // Block new clock-in if there's an open segment on ANY day.
+    // Previously this only looked at today, which let a forgotten
+    // clock-out on a previous day coexist with a new clock-in today.
+    const existing = FSM.findOpenAcrossDays(App.state.days);
+    if (existing) {
+      const where = existing.dateKey === dateKey ? '' : ' on ' + existing.dateKey;
+      UI.toast(
+        'Already ' + (existing.entry.type === 'lunch' ? 'on lunch' : 'clocked in')
+          + ' since ' + (existing.entry.start || '?') + where,
+        'error'
+      );
       return;
     }
-    day.entries.push({
-      id: Storage.uuid(),
-      type: 'work',
-      start: nowHM(),
-      end: ''
-    });
+    const day = ensureDay(dateKey);
+    const result = FSM.clockIn(day.entries, nowHM(), Storage.uuid);
+    if (!result.ok) { UI.toast(result.error, 'error'); return; }
+    day.entries = result.entries;
     persistDay(dateKey);
     UI.toast('Clocked in', 'success');
     render();
   }
 
+  function resolveOpenDay(expectedType, preferredKey) {
+    // Prefer the caller-supplied dateKey when it actually has the
+    // matching open segment. Otherwise fall back to a cross-day
+    // search so yesterday's forgotten clock-in can still be closed
+    // from the dashboard, a hotkey, or the widget.
+    if (preferredKey) {
+      const d = App.state.days[preferredKey];
+      if (d) {
+        const s = Calc.currentStatus(d);
+        if ((expectedType === 'working' && s.state === 'working')
+          || (expectedType === 'lunch' && s.state === 'lunch')) {
+          return { dateKey: preferredKey, day: d, openEntry: s.openEntry };
+        }
+      }
+    }
+    const found = Calc.findOpenAcrossDays(App.state.days);
+    if (!found) return null;
+    const wantWorking = expectedType === 'working';
+    const isLunch = found.entry.type === 'lunch';
+    if (wantWorking && isLunch) return null;
+    if (!wantWorking && !isLunch) return null;
+    return {
+      dateKey: found.dateKey,
+      day: App.state.days[found.dateKey],
+      openEntry: found.entry
+    };
+  }
+
   function clockOut(dateKey) {
-    const day = ensureDay(dateKey);
-    const status = Calc.currentStatus(day);
-    if (status.state !== 'working') {
+    const open = resolveOpenDay('working', dateKey);
+    if (!open) {
       UI.toast('Not currently working', 'error');
       return;
     }
-    status.openEntry.end = nowHM();
-    persistDay(dateKey);
+    const result = FSM.clockOut(open.day.entries, nowHM());
+    if (!result.ok) { UI.toast(result.error, 'error'); return; }
+    open.day.entries = result.entries;
+    persistDay(open.dateKey);
     UI.toast('Clocked out', 'success');
     render();
   }
 
   function lunchStart(dateKey) {
-    const day = ensureDay(dateKey);
-    const status = Calc.currentStatus(day);
-    if (status.state !== 'working') {
+    const open = resolveOpenDay('working', dateKey);
+    if (!open) {
       UI.toast('You must be clocked in first', 'error');
       return;
     }
-    const now = nowHM();
-    status.openEntry.end = now;
-    day.entries.push({
-      id: Storage.uuid(),
-      type: 'lunch',
-      start: now,
-      end: ''
-    });
-    persistDay(dateKey);
+    const result = FSM.lunchStart(open.day.entries, nowHM(), Storage.uuid);
+    if (!result.ok) { UI.toast(result.error, 'error'); return; }
+    open.day.entries = result.entries;
+    persistDay(open.dateKey);
     UI.toast('Lunch started', 'info');
     render();
   }
 
   function lunchEnd(dateKey) {
-    const day = ensureDay(dateKey);
-    const status = Calc.currentStatus(day);
-    if (status.state !== 'lunch') {
+    const open = resolveOpenDay('lunch', dateKey);
+    if (!open) {
       UI.toast('Not on lunch', 'error');
       return;
     }
-    const now = nowHM();
-    status.openEntry.end = now;
-    day.entries.push({
-      id: Storage.uuid(),
-      type: 'work',
-      start: now,
-      end: ''
-    });
-    persistDay(dateKey);
+    const result = FSM.lunchEnd(open.day.entries, nowHM(), Storage.uuid);
+    if (!result.ok) { UI.toast(result.error, 'error'); return; }
+    open.day.entries = result.entries;
+    persistDay(open.dateKey);
     UI.toast('Back to work', 'success');
     render();
   }
@@ -509,11 +551,20 @@
       }
 
       const inMin = Calc.parseHM(clockIn);
-      const outMin = Calc.parseHM(clockOut);
-      if (inMin == null || outMin == null || outMin <= inMin) {
-        errEl.textContent = 'Clock out must be later than clock in on the same day.';
+      const outMinRaw = Calc.parseHM(clockOut);
+      if (inMin == null || outMinRaw == null) {
+        errEl.textContent = 'Clock in and clock out are required.';
         return;
       }
+      if (outMinRaw === inMin) {
+        errEl.textContent = 'Clock in and clock out cannot be identical.';
+        return;
+      }
+      // Allow overnight shifts: if clockOut <= clockIn we assume the
+      // shift crosses midnight. Internally we represent the "end" side
+      // on an extended minute axis (+24h) for overlap checks only.
+      const overnight = outMinRaw < inMin;
+      const outMin = overnight ? outMinRaw + 24 * 60 : outMinRaw;
 
       const hasLunch = lunchStart || lunchEnd;
       if (hasLunch && (!lunchStart || !lunchEnd)) {
@@ -523,9 +574,18 @@
 
       const newSegments = [];
       if (hasLunch) {
-        const ls = Calc.parseHM(lunchStart);
-        const le = Calc.parseHM(lunchEnd);
-        if (ls == null || le == null || le <= ls) {
+        const lsRaw = Calc.parseHM(lunchStart);
+        const leRaw = Calc.parseHM(lunchEnd);
+        if (lsRaw == null || leRaw == null) {
+          errEl.textContent = 'Invalid lunch time.';
+          return;
+        }
+        // Project lunch onto the same extended axis as clockIn/clockOut.
+        // A lunch "before" clockIn in wall-clock time is assumed to be
+        // on the next calendar day (overnight shift case).
+        const ls = lsRaw < inMin ? lsRaw + 24 * 60 : lsRaw;
+        const le = leRaw < inMin ? leRaw + 24 * 60 : leRaw;
+        if (le <= ls) {
           errEl.textContent = 'Lunch end must be later than lunch start.';
           return;
         }
@@ -602,7 +662,8 @@
     const key = App.diaryDate;
     const day = App.state.days[key] || { entries: [], note: '' };
     const settings = App.state.settings;
-    const c = Calc.computeDay(day, settings);
+    const diaryDate = Calc.parseDateKey(key);
+    const c = Calc.computeDay(day, settings, diaryDate);
 
     const summaryEl = view.querySelector('[data-diary-summary]');
     summaryEl.appendChild(UI.stat('Worked', Calc.formatHours(c.workedHours)));
@@ -824,7 +885,7 @@
         w.regularTotal,
         w.overtimeFilled,
         w.flexGain,
-        settings.regularHoursPerDay * 5 + settings.weeklyOvertimeTargetHours
+        settings.regularHoursPerDay * Calc.countWorkDays(settings) + settings.weeklyOvertimeTargetHours
       ));
     }
     monthChart.appendChild(UI.chartLegend());
@@ -939,6 +1000,12 @@
     form.elements['flexOpeningBalance'].value = s.flexOpeningBalance || 0;
     form.elements['flexOpeningDate'].value = s.flexOpeningDate || '';
 
+    const workDays = Calc.workDaysArray(s);
+    for (const box of form.querySelectorAll('[data-work-day]')) {
+      const dow = parseInt(box.getAttribute('data-work-day'), 10);
+      box.checked = !!workDays[dow];
+    }
+
     // The office-time inputs use the 24h widget (wireTime24 handles masking).
     UI.upgradeTime24Inputs(form);
 
@@ -949,6 +1016,11 @@
       const officeEnd = UI.normaliseTime24(f['officeEnd'].value);
       f['officeStart'].value = officeStart;
       f['officeEnd'].value = officeEnd;
+      const wd = [false, false, false, false, false, false, false];
+      for (const box of form.querySelectorAll('[data-work-day]')) {
+        const dow = parseInt(box.getAttribute('data-work-day'), 10);
+        if (dow >= 0 && dow < 7) wd[dow] = box.checked;
+      }
       App.state.settings = {
         weekStartDay: parseInt(f['weekStartDay'].value, 10),
         regularHoursPerDay: parseFloat(f['regularHoursPerDay'].value) || 0,
@@ -961,7 +1033,8 @@
         flexOpeningBalance: parseFloat(f['flexOpeningBalance'].value) || 0,
         flexOpeningDate: f['flexOpeningDate'].value || '',
         officeStart: officeStart,
-        officeEnd: officeEnd
+        officeEnd: officeEnd,
+        workDays: wd
       };
       persistSettings();
       UI.toast('Settings saved', 'success');
@@ -1253,9 +1326,9 @@
       if (k === 'i') { clockIn(todayKey); }
       else if (k === 'o') { clockOut(todayKey); }
       else if (k === 'l') {
-        const status = Calc.currentStatus(App.state.days[todayKey]);
-        if (status.state === 'working') lunchStart(todayKey);
-        else if (status.state === 'lunch') lunchEnd(todayKey);
+        const status = Calc.globalStatus(App.state.days, todayKey);
+        if (status.state === 'working') lunchStart(status.openDateKey || todayKey);
+        else if (status.state === 'lunch') lunchEnd(status.openDateKey || todayKey);
       }
       else if (k === '1') setView('dashboard');
       else if (k === '2') setView('diary');
@@ -1310,17 +1383,31 @@
     // on lunch, without a full re-render.
     setInterval(() => {
       const nodes = document.querySelectorAll('[data-elapsed-ticker][data-elapsed-start]');
+      const todayKey = Calc.toDateKey(new Date());
       for (const node of nodes) {
         const start = node.getAttribute('data-elapsed-start');
-        if (start) node.textContent = formatElapsedSince(start);
+        const startDate = node.getAttribute('data-elapsed-start-date') || todayKey;
+        if (start) node.textContent = formatElapsedSince(start, startDate, todayKey);
       }
     }, 1000);
   }
 
   function setupBeforeUnloadFlush() {
-    // Best-effort: flush any pending writes when the user closes the tab.
-    window.addEventListener('beforeunload', () => {
-      try { Storage.flushNow(); } catch (_) { /* ignore */ }
+    // Durable flush on tab close / navigation away.
+    //
+    // `beforeunload` cannot reliably await async work and browsers may
+    // drop in-flight fetches on navigation. `pagehide` + keepalive
+    // fetch is the modern replacement: the browser allows in-flight
+    // keepalive requests to finish even after the tab is gone. We
+    // also fire on `visibilitychange: hidden` because on iOS Safari
+    // (and when the page is put into bfcache) that is the last event
+    // we're guaranteed to receive.
+    const flush = () => {
+      try { Storage.flushKeepalive(); } catch (_) { /* ignore */ }
+    };
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') flush();
     });
   }
 

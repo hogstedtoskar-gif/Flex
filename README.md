@@ -328,6 +328,7 @@ widget. Revoking a token is immediate.
    - `extraOutside = outside` — all outside-office hours, eligible for overtime **only**.
    - `shortfall = max(0, dailyHours - inOffice)` — outside-hours work does not reduce shortfall.
    - If `officeStart`/`officeEnd` are blank or invalid the window is disabled and all hours are treated as in-office.
+   - **Non-working days (default Sat/Sun)** are the exception: every worked minute is routed straight to `extraOutside` (overtime-only), `regular`/`extraInOffice` are always 0, and `shortfall` is always 0. The set of working days is configurable per user in Settings → Work days.
 2. Per week (starts on the configured day), days are walked in order:
    - Inside the overtime period, the weekly overtime target is filled from `extraOutside` **first** (use-it-or-lose-it — outside hours can never become flex), then from `extraInOffice`. Any leftover `extraInOffice` becomes `flex gain`. Any leftover `extraOutside` is counted as `outsideUnused` and is discarded.
    - Outside the overtime period, all `extraInOffice` becomes flex gain and all `extraOutside` is discarded.
@@ -342,6 +343,7 @@ Configurable in the Settings view:
 |---|---|
 | Week starts on | Mon / Sun / Sat — affects week grouping everywhere |
 | Regular hours per day | Threshold above which hours become "extra" |
+| Work days | Which weekdays are working days (default Mon–Fri). Worked time on unchecked days can only fill the weekly overtime target — never becomes regular or flex, and never creates shortfall. The weekly "Regular hours" progress bar target is `regularHoursPerDay × (number of checked days)`. |
 | Office hours start / end | Work outside this window can only become overtime — never regular or flex. Leave blank to disable. |
 | Weekly overtime target | How many extra hours per week count as ordered overtime before overflowing to flex |
 | Overtime period start | First day of the ordered-overtime period |

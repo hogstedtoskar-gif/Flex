@@ -1,17 +1,22 @@
 /* quick.js — Widget-friendly state transitions.
  *
- * Implements the same clock-in / clock-out / lunch state machine that
- * lives in public/js/app.js, but server-side so a plain HTTP POST from
- * an iOS Shortcut or Android widget can drive it.
+ * HTTP wrapper around the shared state machine in public/js/fsm.js
+ * so that a plain HTTP POST from an iOS Shortcut or Android widget
+ * can drive clock-in/out/lunch. The same FSM module is used by the
+ * browser dashboard (public/js/app.js) — do not duplicate its rules
+ * here; go edit fsm.js instead.
  *
- * The "now" time used for the transition defaults to the server's local
- * clock, but can be overridden with:
+ * The "now" time used for the transition defaults to the server's
+ * local clock, but can be overridden with:
  *   - query/body `tz`   — IANA timezone name (e.g. "Europe/Stockholm")
  *   - query/body `date` — YYYY-MM-DD (override the day the entry lands in)
  *   - query/body `time` — HH:MM (override the clock time of the action)
  * These let a widget pass the phone's timezone/clock explicitly when
  * the server runs in a different zone.
  */
+
+const path = require('path');
+const FSM = require(path.join(__dirname, '..', 'public', 'js', 'fsm.js'));
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -58,27 +63,12 @@ function resolveWhen(input) {
   };
 }
 
-function parseHM(hm) {
-  const m = TIME_RE.exec(hm || '');
-  if (!m) return null;
-  return parseInt(hm.slice(0, 2), 10) * 60 + parseInt(hm.slice(3, 5), 10);
-}
-
-function currentStatus(entries) {
-  const list = Array.isArray(entries) ? entries : [];
-  const open = list.find((e) => e && e.start && !e.end);
-  if (open) {
-    return {
-      state: open.type === 'lunch' ? 'lunch' : 'working',
-      since: open.start,
-      openId: open.id
-    };
-  }
-  return { state: 'off' };
-}
+// Alias the pure time helper from the shared FSM module so existing
+// call sites read naturally.
+const parseHM = FSM.parseHM;
+const currentStatus = FSM.currentStatus;
 
 function uuid() {
-  // Node 20+ has crypto.randomUUID on the global object.
   if (typeof globalThis.crypto !== 'undefined' && globalThis.crypto.randomUUID) {
     return globalThis.crypto.randomUUID();
   }
@@ -129,16 +119,33 @@ function conflict(msg) {
 }
 
 // --- transitions ------------------------------------------------------
+//
+// The core state-machine rules live in public/js/fsm.js; this module
+// owns the day-routing (which dateKey gets written) and the persistence
+// glue. If you need to change clock-in/out/lunch semantics, edit fsm.js
+// so the browser gets the same change for free.
+
+function findOpenDay(state) {
+  for (const [k, d] of Object.entries(state.days)) {
+    if (FSM.currentStatus(d.entries).openId) return { key: k, day: d };
+  }
+  return null;
+}
 
 function clockIn(store, userId, input) {
   const { dateKey, hm } = resolveWhen(input);
   const state = store.getState(userId);
-  const day = state.days[dateKey] || { entries: [], note: '' };
-  const status = currentStatus(day.entries);
-  if (status.state !== 'off') {
-    throw conflict(`Already ${status.state} since ${status.since || '?'}`);
+  // Block a new clock-in if any day already has an open segment.
+  const existing = findOpenDay(state);
+  if (existing) {
+    const st = FSM.currentStatus(existing.day.entries);
+    throw conflict(`Already ${st.state} since ${st.since || '?'}`
+      + (existing.key !== dateKey ? ` on ${existing.key}` : ''));
   }
-  day.entries = day.entries.concat([{ id: uuid(), type: 'work', start: hm, end: '' }]);
+  const day = state.days[dateKey] || { entries: [], note: '' };
+  const result = FSM.clockIn(day.entries, hm, uuid);
+  if (!result.ok) throw conflict(result.error);
+  day.entries = result.entries;
   store.setDay(userId, dateKey, day);
   return snapshot(dateKey, day);
 }
@@ -146,24 +153,19 @@ function clockIn(store, userId, input) {
 function clockOut(store, userId, input) {
   const { dateKey, hm } = resolveWhen(input);
   const state = store.getState(userId);
-  // Clocking out should close the most recent open entry on either
-  // today or the day it started on — but for simplicity we only touch
-  // today's day. If there's no open entry on `dateKey`, fall back to
-  // the day that has one (handles the "clocked in yesterday, widget
-  // tapped the next morning" case).
+  // Prefer the caller-supplied dateKey when it has the open segment,
+  // otherwise close the open segment wherever it lives (handles "clocked
+  // in yesterday, tapped the widget this morning").
   let day = state.days[dateKey];
   let key = dateKey;
-  if (!day || !currentStatus(day.entries).openId) {
-    for (const [k, d] of Object.entries(state.days)) {
-      if (currentStatus(d.entries).openId) { day = d; key = k; break; }
-    }
+  if (!day || !FSM.currentStatus(day.entries).openId) {
+    const hit = findOpenDay(state);
+    if (hit) { day = hit.day; key = hit.key; }
   }
   if (!day) throw conflict('Not clocked in');
-  const status = currentStatus(day.entries);
-  if (status.state !== 'working') {
-    throw conflict(`Cannot clock out while ${status.state}`);
-  }
-  day.entries = day.entries.map((e) => e.id === status.openId ? { ...e, end: hm } : e);
+  const result = FSM.clockOut(day.entries, hm);
+  if (!result.ok) throw conflict(result.error);
+  day.entries = result.entries;
   store.setDay(userId, key, day);
   return snapshot(key, day);
 }
@@ -173,28 +175,16 @@ function lunchToggle(store, userId, input) {
   const state = store.getState(userId);
   let day = state.days[dateKey];
   let key = dateKey;
-  if (!day || !day.entries || !day.entries.length) {
-    for (const [k, d] of Object.entries(state.days)) {
-      if (currentStatus(d.entries).openId) { day = d; key = k; break; }
-    }
+  if (!day || !FSM.currentStatus(day.entries).openId) {
+    const hit = findOpenDay(state);
+    if (hit) { day = hit.day; key = hit.key; }
   }
   if (!day) throw conflict('Not clocked in');
-  const status = currentStatus(day.entries);
-  if (status.state === 'working') {
-    // start lunch
-    day.entries = day.entries.map((e) => e.id === status.openId ? { ...e, end: hm } : e)
-      .concat([{ id: uuid(), type: 'lunch', start: hm, end: '' }]);
-    store.setDay(userId, key, day);
-    return snapshot(key, day);
-  }
-  if (status.state === 'lunch') {
-    // end lunch + resume work
-    day.entries = day.entries.map((e) => e.id === status.openId ? { ...e, end: hm } : e)
-      .concat([{ id: uuid(), type: 'work', start: hm, end: '' }]);
-    store.setDay(userId, key, day);
-    return snapshot(key, day);
-  }
-  throw conflict('Not clocked in — can\'t toggle lunch');
+  const result = FSM.lunchToggle(day.entries, hm, uuid);
+  if (!result.ok) throw conflict(result.error);
+  day.entries = result.entries;
+  store.setDay(userId, key, day);
+  return snapshot(key, day);
 }
 
 function statusOf(store, userId, input) {
@@ -202,10 +192,9 @@ function statusOf(store, userId, input) {
   const state = store.getState(userId);
   let day = state.days[dateKey];
   let key = dateKey;
-  if (!day || currentStatus(day.entries).state === 'off') {
-    for (const [k, d] of Object.entries(state.days)) {
-      if (currentStatus(d.entries).openId) { day = d; key = k; break; }
-    }
+  if (!day || FSM.currentStatus(day.entries).state === 'off') {
+    const hit = findOpenDay(state);
+    if (hit) { day = hit.day; key = hit.key; }
   }
   return snapshot(key, day || { entries: [], note: '' });
 }

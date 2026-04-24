@@ -293,6 +293,18 @@
             <span>Regular hours per day</span>
             <input type="number" name="regularHoursPerDay" min="0" max="24" step="0.25" />
           </label>
+          <fieldset class="work-days-field">
+            <legend>Work days <em class="muted small">(hours on unchecked days are overtime-only — never regular, never shortfall)</em></legend>
+            <div class="work-days-row" data-work-days>
+              <label><input type="checkbox" data-work-day="1" /> Mon</label>
+              <label><input type="checkbox" data-work-day="2" /> Tue</label>
+              <label><input type="checkbox" data-work-day="3" /> Wed</label>
+              <label><input type="checkbox" data-work-day="4" /> Thu</label>
+              <label><input type="checkbox" data-work-day="5" /> Fri</label>
+              <label><input type="checkbox" data-work-day="6" /> Sat</label>
+              <label><input type="checkbox" data-work-day="0" /> Sun</label>
+            </div>
+          </fieldset>
           <label>
             <span>Office hours start <em class="muted small">(HH:MM, blank = no limit)</em></span>
             <input type="text" class="time24" name="officeStart" placeholder="07:30" />
@@ -435,6 +447,7 @@
     </section>
   </template>
 
+  <script src="js/fsm.js"></script>
   <script src="js/calc.js"></script>
   <script src="js/storage.js"></script>
   <script src="js/ui.js"></script>

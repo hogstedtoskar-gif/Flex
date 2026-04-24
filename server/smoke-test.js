@@ -22,6 +22,9 @@
  *  11. logout -> /api/state 401
  */
 
+const fs = require('node:fs');
+const path = require('node:path');
+
 const BASE = process.env.BASE || 'http://127.0.0.1:8787';
 const SMOKE_USERNAME = process.env.SMOKE_USERNAME
   || ('smoke_' + Math.random().toString(36).slice(2, 8));
@@ -34,6 +37,72 @@ let cookieJar = '';
 function assert(cond, msg) {
   if (cond) { passed++; console.log('  ✓ ' + msg); }
   else { failed++; console.error('  ✗ ' + msg); }
+}
+
+/**
+ * Static parity check: server/db.js and public/js/storage.js both
+ * declare a `DEFAULT_SETTINGS` object. If the two drift, the client
+ * briefly renders stale defaults before the first /api/state response
+ * arrives. This check runs before we touch the network so it fails
+ * fast even if the server isn't up.
+ */
+function checkDefaultsParity() {
+  console.log('\n[0] Default-settings parity (server vs client)');
+  const repoRoot = path.join(__dirname, '..');
+  const dbPath = path.join(repoRoot, 'server', 'db.js');
+  const storagePath = path.join(repoRoot, 'public', 'js', 'storage.js');
+
+  function extractDefaultKeys(filePath) {
+    const src = fs.readFileSync(filePath, 'utf8');
+    const startIdx = src.indexOf('DEFAULT_SETTINGS = {');
+    if (startIdx < 0) throw new Error('No DEFAULT_SETTINGS in ' + filePath);
+    const from = src.indexOf('{', startIdx);
+    // Balanced-brace scan to find the matching close.
+    let depth = 0;
+    let end = -1;
+    for (let i = from; i < src.length; i++) {
+      const ch = src[i];
+      if (ch === '{') depth++;
+      else if (ch === '}') { depth--; if (depth === 0) { end = i; break; } }
+    }
+    if (end < 0) throw new Error('Unbalanced braces in ' + filePath);
+    let body = src.slice(from + 1, end);
+    // Strip comments before string/brace parsing so a comment like
+    // "Office hours window: ..." doesn't masquerade as a setting key.
+    body = body.replace(/\/\*[\s\S]*?\*\//g, ' ');
+    body = body.replace(/(^|[^:])\/\/.*$/gm, (match, prefix) => prefix + ' ');
+    // Grab top-level `identifier:` patterns. This is a naive parser,
+    // but our DEFAULT_SETTINGS only uses simple literal keys.
+    const keys = new Set();
+    const noStrings = body.replace(/'(?:\\.|[^'\\])*'/g, '""').replace(/"(?:\\.|[^"\\])*"/g, '""');
+    // Strip nested objects/arrays at depth > 0 so we only see top-level keys.
+    let d = 0; let stripped = '';
+    for (const ch of noStrings) {
+      if (ch === '{' || ch === '[') { d++; stripped += ' '; continue; }
+      if (ch === '}' || ch === ']') { d--; stripped += ' '; continue; }
+      stripped += d === 0 ? ch : ' ';
+    }
+    const re = /([A-Za-z_$][\w$]*)\s*:/g;
+    let m;
+    while ((m = re.exec(stripped)) !== null) keys.add(m[1]);
+    return keys;
+  }
+
+  try {
+    const serverKeys = extractDefaultKeys(dbPath);
+    const clientKeys = extractDefaultKeys(storagePath);
+    const missingOnClient = [...serverKeys].filter((k) => !clientKeys.has(k));
+    const missingOnServer = [...clientKeys].filter((k) => !serverKeys.has(k));
+    assert(
+      missingOnClient.length === 0 && missingOnServer.length === 0,
+      'DEFAULT_SETTINGS keys match between server/db.js and public/js/storage.js'
+    );
+    if (missingOnClient.length) console.error('     missing on client:', missingOnClient.join(', '));
+    if (missingOnServer.length) console.error('     missing on server:', missingOnServer.join(', '));
+  } catch (err) {
+    failed++;
+    console.error('  ✗ parity check crashed: ' + err.message);
+  }
 }
 
 async function req(method, path, body, extraHeaders) {
@@ -61,6 +130,8 @@ async function req(method, path, body, extraHeaders) {
 
 async function main() {
   console.log('Smoke testing ' + BASE);
+
+  checkDefaultsParity();
 
   console.log('\n[1] Static');
   let r = await req('GET', '/');

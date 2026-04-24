@@ -9,6 +9,10 @@
 const Storage = (() => {
   const API_BASE = '/api';
 
+  // ⚠️  KEEP IN SYNC with `server/db.js` (`const DEFAULT_SETTINGS`).
+  //     server/smoke-test.js has a static parity check that fails if
+  //     these objects drift — see the "Default-settings parity" block
+  //     in that file.
   const DEFAULT_SETTINGS = {
     weekStartDay: 1,
     regularHoursPerDay: 8,
@@ -21,7 +25,12 @@ const Storage = (() => {
     flexOpeningBalance: 0,
     flexOpeningDate: '',
     officeStart: '07:30',
-    officeEnd: '17:30'
+    officeEnd: '17:30',
+    // Which weekdays count as working days (indexed by Date.getDay():
+    // 0=Sun, 1=Mon, ..., 6=Sat). On non-working days, worked hours are
+    // treated overtime-only (just like "outside office hours") and the
+    // day never contributes shortfall.
+    workDays: [false, true, true, true, true, true, false]
   };
 
   function emptyState() {
@@ -237,6 +246,53 @@ const Storage = (() => {
     }
   }
 
+  /**
+   * Synchronously dispatch any pending writes using fetch with
+   * `keepalive: true`. Designed to be called from `pagehide` /
+   * `visibilitychange: hidden` — browsers allow in-flight keepalive
+   * requests to complete even after the tab is closed or navigated
+   * away, whereas plain fetch() or async/await `flushNow()` can be
+   * dropped mid-flight.
+   *
+   * Returns immediately; responses are not awaited and errors are
+   * swallowed (we have no UI surface to report them once the page
+   * is gone).
+   */
+  function flushKeepalive() {
+    if (!pendingDays.size && !pendingSettings) return;
+    const dayWrites = Array.from(pendingDays.entries());
+    pendingDays.clear();
+    const settingsWrite = pendingSettings;
+    pendingSettings = null;
+    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+
+    const base = API_BASE;
+    const opts = (method, body) => {
+      const init = {
+        method,
+        credentials: 'same-origin',
+        keepalive: true,
+        headers: { 'Accept': 'application/json' }
+      };
+      if (body !== undefined) {
+        init.headers['Content-Type'] = 'application/json';
+        init.body = JSON.stringify(body);
+      }
+      return init;
+    };
+    for (const [dateKey, payload] of dayWrites) {
+      const url = base + '/days/' + encodeURIComponent(dateKey);
+      try {
+        if (payload === null) fetch(url, opts('DELETE'));
+        else fetch(url, opts('PUT', payload));
+      } catch (_) { /* nothing we can do at tab-close */ }
+    }
+    if (settingsWrite) {
+      try { fetch(base + '/settings', opts('PUT', settingsWrite)); }
+      catch (_) { /* ignore */ }
+    }
+  }
+
   async function reset() {
     pendingDays.clear();
     pendingSettings = null;
@@ -305,7 +361,7 @@ const Storage = (() => {
     for (const key of keys) {
       const day = state.days[key];
       const date = Calc.parseDateKey(key);
-      const c = Calc.computeDay(day, settings);
+      const c = Calc.computeDay(day, settings, date);
       const alloc = dayAlloc.get(key) || { overtime: 0, flexGain: 0, outsideUnused: 0, inPeriod: false };
       const segStr = (day.entries || [])
         .map(e => `${e.type[0].toUpperCase()}:${e.start || '--:--'}-${e.end || '--:--'}`)
@@ -360,6 +416,7 @@ const Storage = (() => {
     deleteDay,
     saveSettings,
     flushNow,
+    flushKeepalive,
     reset,
     uuid,
     exportJson,
