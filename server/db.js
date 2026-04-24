@@ -11,6 +11,9 @@
  *                  PRIMARY KEY (user_id, date)
  *   api_tokens     (id, user_id, token_hash, label, created_at, last_used_at)
  *                  Long-lived bearer tokens for the phone-widget endpoints.
+ *   projects       (id, user_id, name, color, archived, created_at)
+ *                  Optional project tag per work segment. Segments reference
+ *                  a project by id in the `entries` JSON on `days`.
  *
  * Old single-user databases (schema with plain `days.date` PK and a
  * global `meta.settings` row) are migrated on first open: a bootstrap
@@ -65,7 +68,10 @@ const DEFAULT_SETTINGS = {
   // 0=Sun, 1=Mon, ..., 6=Sat). Non-working days never earn regular
   // hours and never contribute shortfall; worked time on them can
   // only fill the weekly overtime target.
-  workDays: [false, true, true, true, true, true, false]
+  workDays: [false, true, true, true, true, true, false],
+  // Optional default project applied to new work segments when none
+  // is picked in the UI / widget (empty string = untagged).
+  defaultProjectId: ''
 };
 
 function todayKey() {
@@ -202,7 +208,8 @@ function open(dbPath) {
       try { entries = JSON.parse(row.entries); } catch (_) { entries = []; }
       days[row.date] = { entries, note: row.note || '' };
     }
-    return { version: 1, settings, days };
+    const projects = listProjects(userId);
+    return { version: 1, settings, days, projects };
   }
 
   function getSettings(userId) {
@@ -227,7 +234,8 @@ function open(dbPath) {
   function setDay(userId, dateKey, day) {
     if (!isDateKey(dateKey)) throw badRequest('Invalid date key: ' + dateKey);
     if (!day || typeof day !== 'object') throw badRequest('day must be an object');
-    const entries = Array.isArray(day.entries) ? day.entries : [];
+    const rawEntries = Array.isArray(day.entries) ? day.entries : [];
+    const entries = sanitizeEntries(userId, rawEntries);
     const note = typeof day.note === 'string' ? day.note : '';
     if (!entries.length && !note) {
       stmts.deleteDay.run(userId, dateKey);
@@ -235,6 +243,49 @@ function open(dbPath) {
     }
     stmts.upsertDay.run(userId, dateKey, note, JSON.stringify(entries));
     return { entries, note };
+  }
+
+  // Strip unknown fields, coerce types, and validate projectId / tags.
+  //
+  // Unknown projectIds silently become null (not 400) because the UI
+  // could theoretically send the id of a project the user deleted from
+  // another tab — treating that as "untagged" matches the "stable by
+  // default" ethos and avoids breaking an in-flight write.
+  function sanitizeEntries(userId, entries) {
+    const validProjectIds = new Set(
+      stmts.listProjectsForUser.all(userId).map((r) => r.id)
+    );
+    return entries.map((e) => {
+      if (!e || typeof e !== 'object') return null;
+      const out = {
+        id: typeof e.id === 'string' && e.id ? e.id : String(Date.now()) + Math.random().toString(36).slice(2),
+        type: e.type === 'lunch' ? 'lunch' : 'work',
+        start: typeof e.start === 'string' ? e.start : '',
+        end: typeof e.end === 'string' ? e.end : ''
+      };
+      if (e.projectId != null && e.projectId !== '') {
+        const pid = Number(e.projectId);
+        if (Number.isFinite(pid) && validProjectIds.has(pid)) {
+          out.projectId = pid;
+        }
+      }
+      if (Array.isArray(e.tags)) {
+        const tags = [];
+        const seen = new Set();
+        for (const t of e.tags) {
+          if (typeof t !== 'string') continue;
+          const trimmed = t.trim().slice(0, 32);
+          if (!trimmed) continue;
+          const key = trimmed.toLowerCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          tags.push(trimmed);
+          if (tags.length >= 10) break;
+        }
+        if (tags.length) out.tags = tags;
+      }
+      return out;
+    }).filter(Boolean);
   }
 
   function deleteDay(userId, dateKey) {
@@ -259,6 +310,24 @@ function open(dbPath) {
     if (!state || typeof state !== 'object') throw badRequest('state must be an object');
     if (!state.days || typeof state.days !== 'object') throw badRequest('state.days is required');
     return withTx(() => {
+      // Replace projects first, so the sanitizer running inside
+      // the day loop sees the new id-space.
+      stmts.deleteAllProjectsForUser.run(userId);
+      const idMap = new Map(); // old id (any) -> new id
+      if (Array.isArray(state.projects)) {
+        for (const p of state.projects) {
+          if (!p || typeof p !== 'object') continue;
+          const name = typeof p.name === 'string' ? p.name.trim().slice(0, 64) : '';
+          if (!name) continue;
+          const color = coerceColor(p.color);
+          const archived = p.archived ? 1 : 0;
+          const info = stmts.insertProject.run(userId, name, color, archived);
+          const newId = Number(info.lastInsertRowid);
+          if (p.id != null) idMap.set(p.id, newId);
+          if (p.id != null) idMap.set(String(p.id), newId);
+          if (p.id != null) idMap.set(Number(p.id), newId);
+        }
+      }
       stmts.deleteAllDaysForUser.run(userId);
       if (state.settings) {
         stmts.upsertUserSettings.run(
@@ -269,7 +338,15 @@ function open(dbPath) {
       for (const [date, day] of Object.entries(state.days)) {
         if (!isDateKey(date)) continue;
         if (!day || typeof day !== 'object') continue;
-        const entries = Array.isArray(day.entries) ? day.entries : [];
+        const rawEntries = Array.isArray(day.entries) ? day.entries : [];
+        // Re-map any projectId that referred to the import's own id space.
+        const remapped = rawEntries.map((e) => {
+          if (e && e.projectId != null && idMap.has(e.projectId)) {
+            return { ...e, projectId: idMap.get(e.projectId) };
+          }
+          return e;
+        });
+        const entries = sanitizeEntries(userId, remapped);
         const note = typeof day.note === 'string' ? day.note : '';
         if (!entries.length && !note) continue;
         stmts.upsertDay.run(userId, date, note, JSON.stringify(entries));
@@ -281,9 +358,79 @@ function open(dbPath) {
   function resetUser(userId) {
     return withTx(() => {
       stmts.deleteAllDaysForUser.run(userId);
+      stmts.deleteAllProjectsForUser.run(userId);
       stmts.upsertUserSettings.run(userId, JSON.stringify(DEFAULT_SETTINGS));
       return getState(userId);
     });
+  }
+
+  /* ---------------- projects ---------------- */
+
+  function listProjects(userId) {
+    return stmts.listProjectsForUser.all(userId).map((r) => ({
+      id: r.id,
+      name: r.name,
+      color: r.color,
+      archived: !!r.archived
+    }));
+  }
+
+  function createProject(userId, { name, color }) {
+    const clean = typeof name === 'string' ? name.trim().slice(0, 64) : '';
+    if (!clean) throw badRequest('project name is required');
+    const c = coerceColor(color);
+    try {
+      const info = stmts.insertProject.run(userId, clean, c, 0);
+      return { id: Number(info.lastInsertRowid), name: clean, color: c, archived: false };
+    } catch (err) {
+      if (String(err.message).includes('UNIQUE')) throw conflict('project name already exists');
+      throw err;
+    }
+  }
+
+  function updateProject(userId, projectId, patch) {
+    const existing = stmts.projectByIdForUser.get(projectId, userId);
+    if (!existing) throw notFound('project not found');
+    const name = patch && typeof patch.name === 'string'
+      ? patch.name.trim().slice(0, 64)
+      : existing.name;
+    if (!name) throw badRequest('project name is required');
+    const color = patch && 'color' in patch
+      ? coerceColor(patch.color)
+      : existing.color;
+    const archived = patch && 'archived' in patch
+      ? (patch.archived ? 1 : 0)
+      : existing.archived;
+    try {
+      stmts.updateProject.run(name, color, archived, projectId, userId);
+    } catch (err) {
+      if (String(err.message).includes('UNIQUE')) throw conflict('project name already exists');
+      throw err;
+    }
+    return { id: projectId, name, color, archived: !!archived };
+  }
+
+  function deleteProject(userId, projectId) {
+    // Refuse when the project is still referenced by at least one
+    // entry — the admin should archive it instead (deleting would
+    // silently unlabel history).
+    const referenced = isProjectReferenced(userId, projectId);
+    if (referenced) throw conflict('project has entries — archive it instead');
+    const info = stmts.deleteProject.run(projectId, userId);
+    return info.changes > 0;
+  }
+
+  function isProjectReferenced(userId, projectId) {
+    const needle = `"projectId":${projectId}`;
+    const row = stmts.anyDayWithProjectRef.get(userId, `%${needle}%`);
+    return !!row;
+  }
+
+  function coerceColor(raw) {
+    if (typeof raw !== 'string') return null;
+    const s = raw.trim();
+    if (!s) return null;
+    return /^#[0-9a-fA-F]{6}$/.test(s) ? s.toLowerCase() : null;
   }
 
   /* ---------------- api tokens ---------------- */
@@ -352,6 +499,11 @@ function open(dbPath) {
     deleteDay,
     replaceAll,
     resetUser,
+    // projects
+    listProjects,
+    createProject,
+    updateProject,
+    deleteProject,
     // api tokens
     createApiToken,
     listApiTokens,
@@ -395,6 +547,17 @@ function ensureSchema(db) {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id);
+    CREATE TABLE IF NOT EXISTS projects (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id    INTEGER NOT NULL,
+      name       TEXT    NOT NULL,
+      color      TEXT,
+      archived   INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT    NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE (user_id, name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id);
   `);
 
   // The `days` table may exist in legacy form (PK on date only, no user_id).
@@ -607,6 +770,33 @@ function prepareStatements(db) {
     `),
     touchApiToken: db.prepare(
       "UPDATE api_tokens SET last_used_at = datetime('now') WHERE id = ?"
+    ),
+
+    // projects
+    listProjectsForUser: db.prepare(
+      'SELECT id, name, color, archived FROM projects WHERE user_id = ? ORDER BY archived, name'
+    ),
+    projectByIdForUser: db.prepare(
+      'SELECT id, name, color, archived FROM projects WHERE id = ? AND user_id = ?'
+    ),
+    insertProject: db.prepare(
+      'INSERT INTO projects (user_id, name, color, archived) VALUES (?, ?, ?, ?)'
+    ),
+    updateProject: db.prepare(
+      'UPDATE projects SET name = ?, color = ?, archived = ? WHERE id = ? AND user_id = ?'
+    ),
+    deleteProject: db.prepare(
+      'DELETE FROM projects WHERE id = ? AND user_id = ?'
+    ),
+    deleteAllProjectsForUser: db.prepare(
+      'DELETE FROM projects WHERE user_id = ?'
+    ),
+    // Fast-ish "is this project referenced?" check. We store the
+    // entries as a JSON blob, so a LIKE on `"projectId":<id>` is the
+    // simplest way without adding a second table. Good enough for a
+    // multi-user-but-per-user-small dataset.
+    anyDayWithProjectRef: db.prepare(
+      'SELECT 1 FROM days WHERE user_id = ? AND entries LIKE ? LIMIT 1'
     )
   };
 }
@@ -622,6 +812,12 @@ function badRequest(msg) {
 function conflict(msg) {
   const err = new Error(msg);
   err.status = 409;
+  return err;
+}
+
+function notFound(msg) {
+  const err = new Error(msg);
+  err.status = 404;
   return err;
 }
 

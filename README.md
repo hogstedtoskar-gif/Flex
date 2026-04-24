@@ -281,6 +281,8 @@ Optional query (or JSON body) parameters let the widget pass the phone's clock/t
 | `tz` | `Europe/Stockholm` | IANA timezone for "now" (default: server-local) |
 | `date` | `2026-04-22` | Force the day the entry lands in |
 | `time` | `08:03` | Force the clock time of the action |
+| `project` | `3` | Tag the new work segment with this project id (clock-in / lunch-end). Defaults to the user's configured default project; use `0` or `-` to force untagged. |
+| `tags` | `deep-work,review` | Comma-separated tags for the new work segment. |
 
 | Method | Path | Behaviour |
 |---|---|---|
@@ -312,7 +314,9 @@ widget. Revoking a token is immediate.
 - Overtime period tracking with per-week progress bars and total filled vs required.
 - All-time flex balance (positive surplus or negative deficit), with a configurable opening balance.
 - Weekly and monthly summaries with inline bar charts.
-- JSON backup/restore and CSV export (downloaded to your browser).
+- **Projects & tags** – attach an optional project (with custom color) and free-form tags to every work segment. Pick a default project or pick one per clock-in from the dashboard; the weekly/monthly summary breaks totals down by project.
+- **Visual day timeline** – an SVG strip on the dashboard and in the Diary shows the day's segments at a glance, shaded with each project's color. The current work segment grows live as time passes.
+- JSON backup/restore, a daily CSV export, and a per-segment CSV export (project + tags columns).
 - Overlap and validation errors are highlighted in the Diary view.
 - Alerts for past days with an unfinished clock-out.
 - Dark and light themes follow your OS preference.
@@ -353,6 +357,9 @@ Configurable in the Settings view:
 | Auto-lunch threshold (hours) | Daily worked time above which the minimum-lunch rule kicks in (default `6h`). |
 | Opening flex balance | Your flex balance at the start of "applies from" (e.g. imported from a previous tool) |
 | Opening flex applies from | Flex earned on this date and later is summed on top of the opening balance. Days before this date do not contribute (they're assumed to be rolled up in the opening value). Leave blank to sum every recorded day. |
+| Default project | Pre-selects this project for new clock-ins (UI and quick-action widgets). Set to `— None —` to always start untagged. |
+
+Project management lives in the same Settings view: create projects with a display color, rename or recolor them inline, archive when they're no longer in use (archived projects still show in historical reports but disappear from the clock-in picker), and delete projects once they have no entries referencing them.
 
 ## Backups
 

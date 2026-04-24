@@ -1058,6 +1058,259 @@ textarea:focus-visible,
   padding: 0 4px;
 }
 
+/* -------- Projects & tags -------- */
+
+/* Settings: create + list */
+.projects-create {
+  display: grid;
+  grid-template-columns: 1fr 48px auto;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+@media (max-width: 520px) {
+  .projects-create { grid-template-columns: 1fr 48px; }
+  .projects-create .btn { grid-column: 1 / -1; }
+}
+.projects-create input[type="text"],
+.projects-create input[type="color"] {
+  min-height: 36px;
+}
+.projects-row {
+  display: grid;
+  grid-template-columns: 40px 1fr 120px auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  margin-bottom: 6px;
+}
+.projects-row.archived { opacity: 0.6; }
+@media (max-width: 520px) {
+  .projects-row {
+    grid-template-columns: 40px 1fr auto;
+    grid-template-areas:
+      "swatch name del"
+      "color  color color"
+      "arch   arch  arch";
+    gap: 6px;
+  }
+  .projects-row > .project-swatch  { grid-area: swatch; }
+  .projects-row > .project-name-input { grid-area: name; }
+  .projects-row > .project-color-input { grid-area: color; justify-self: start; }
+  .projects-row > [data-action="archive"],
+  .projects-row > [data-action="unarchive"] { grid-area: arch; justify-self: start; }
+  .projects-row > [data-action="delete"] { grid-area: del; }
+}
+.project-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  display: inline-block;
+}
+.project-swatch.tiny {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.project-name-input {
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 13px;
+}
+.project-color-input {
+  width: 40px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+}
+.projects-empty {
+  padding: 14px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* Dashboard: project picker + active project chip */
+.project-picker {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin: 10px 0 14px;
+  flex-wrap: wrap;
+}
+.project-picker label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+.project-picker select {
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  min-width: 160px;
+  min-height: 32px;
+}
+.project-picker-hint { font-size: 11px; }
+
+.project-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  margin-left: 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--border-strong);
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  vertical-align: middle;
+}
+
+/* Diary entry meta row (project + tags) */
+.entry-row { grid-auto-rows: min-content; }
+.entry-meta {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border);
+  margin-top: 2px;
+}
+.entry-project,
+.entry-tags {
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 12px;
+}
+.entry-project { min-width: 140px; }
+.entry-tags { flex: 1; min-width: 0; }
+
+/* Summary: per-project breakdown */
+.project-breakdown-wrap { margin-top: 14px; }
+.project-breakdown-title {
+  font-size: 13px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+.project-table { font-variant-numeric: tabular-nums; }
+.project-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.project-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.tag-chip {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--border);
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+/* -------- Day timeline (SVG) -------- */
+.today-timeline,
+.diary-timeline {
+  margin: 10px 0 4px;
+}
+svg.day-timeline {
+  display: block;
+  width: 100%;
+  height: 56px;
+  max-height: 56px;
+}
+svg.day-timeline.compact { height: 40px; max-height: 40px; }
+.timeline-track {
+  fill: var(--border);
+  opacity: 0.5;
+}
+.timeline-office {
+  fill: var(--primary);
+  opacity: 0.1;
+}
+.timeline-seg {
+  stroke: rgba(0, 0, 0, 0.25);
+  stroke-width: 0.5;
+  transition: filter 120ms ease;
+}
+.timeline-seg.work { fill: var(--regular); }
+.timeline-seg.work.tinted { /* fill comes from project.color attr */ }
+.timeline-seg.lunch {
+  fill: var(--warning);
+  opacity: 0.55;
+}
+.timeline-seg.open {
+  stroke: var(--success);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 2;
+  animation: timeline-open-pulse 1.4s ease-in-out infinite alternate;
+}
+.timeline-seg:hover { filter: brightness(1.12); }
+.timeline-tick {
+  stroke: var(--text-muted);
+  stroke-width: 1;
+  opacity: 0.5;
+}
+.timeline-tick.major { opacity: 0.9; }
+.timeline-tick-label {
+  fill: var(--text-dim);
+  font-size: 9px;
+  font-family: inherit;
+}
+.timeline-now {
+  stroke: var(--danger);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 2;
+  opacity: 0.85;
+}
+.timeline-empty {
+  fill: var(--text-muted);
+  font-size: 11px;
+  font-family: inherit;
+}
+
+@keyframes timeline-open-pulse {
+  from { stroke-opacity: 0.6; }
+  to   { stroke-opacity: 1.0; }
+}
+
+@media (max-width: 640px) {
+  svg.day-timeline { height: 48px; max-height: 48px; }
+}
+
 /* Prevent iOS from auto-zooming when focusing any form field. The
    trigger is font-size < 16px, which several of our 13/14px fields
    would hit. Only applied on phone-ish widths to keep the desktop
@@ -1187,7 +1440,8 @@ textarea:focus-visible,
     grid-template-areas:
       "type    type"
       "start   end"
-      "dur     act";
+      "dur     act"
+      "meta    meta";
     gap: 8px;
     padding: 12px;
   }
@@ -1196,6 +1450,7 @@ textarea:focus-visible,
   .entry-row > input:nth-of-type(2)  { grid-area: end;   min-height: 40px; }
   .entry-row > .entry-duration       { grid-area: dur; text-align: left; font-size: 13px; }
   .entry-row > .entry-actions        { grid-area: act; justify-content: flex-end; }
+  .entry-row > .entry-meta           { grid-area: meta; flex-wrap: wrap; }
   .entry-actions .btn { padding: 8px 14px; font-size: 13px; min-height: 36px; }
 
   /* Manual entry: forcibly single-column (the existing rule kicks in

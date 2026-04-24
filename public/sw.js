@@ -9,7 +9,7 @@
  *     the next time the user opens the app.
  */
 
-const CACHE_VERSION = 'tt-shell-v3';
+const CACHE_VERSION = 'tt-shell-v4';
 const SHELL_ASSETS = [
   '/',
   '/index.html',
@@ -18,6 +18,7 @@ const SHELL_ASSETS = [
   '/js/calc.js',
   '/js/storage.js',
   '/js/ui.js',
+  '/js/timeline.js',
   '/js/app.js',
   '/manifest.webmanifest',
   '/icons/icon.svg',

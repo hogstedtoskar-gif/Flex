@@ -8,9 +8,14 @@
  *
  * The "now" time used for the transition defaults to the server's
  * local clock, but can be overridden with:
- *   - query/body `tz`   — IANA timezone name (e.g. "Europe/Stockholm")
- *   - query/body `date` — YYYY-MM-DD (override the day the entry lands in)
- *   - query/body `time` — HH:MM (override the clock time of the action)
+ *   - query/body `tz`      — IANA timezone name (e.g. "Europe/Stockholm")
+ *   - query/body `date`    — YYYY-MM-DD (override the day the entry lands in)
+ *   - query/body `time`    — HH:MM (override the clock time of the action)
+ *   - body/query `project` — numeric project id to tag the new work segment
+ *                            (clock-in / lunch-end; defaults to the user's
+ *                            configured `settings.defaultProjectId` when
+ *                            omitted). Use 0 or "-" to force untagged.
+ *   - body/query `tags`    — comma-separated tag list for the new segment
  * These let a widget pass the phone's timezone/clock explicitly when
  * the server runs in a different zone.
  */
@@ -61,6 +66,41 @@ function resolveWhen(input) {
     dateKey: overrideDate || dateKey,
     hm: overrideTime || hm
   };
+}
+
+// Parse the optional project/tag hints on a widget request.
+//
+// project:
+//   - missing       -> use the user's defaultProjectId from settings
+//   - '0' / '-'     -> explicitly untagged (bypass default)
+//   - numeric       -> that project id
+// tags:
+//   - missing       -> no tags
+//   - comma-string  -> split/trim, dedupe, cap at 10 @ 32 chars each.
+function resolveSegmentOpts(store, userId, input) {
+  const src = input || {};
+  const opts = {};
+  let projectRaw = src.project != null ? src.project : src.projectId;
+  if (projectRaw === undefined || projectRaw === null || projectRaw === '') {
+    try {
+      const s = store.getSettings(userId);
+      if (s && s.defaultProjectId) projectRaw = s.defaultProjectId;
+    } catch (_) { /* ignore — no default is fine */ }
+  }
+  if (projectRaw != null && projectRaw !== '') {
+    const str = String(projectRaw).trim();
+    if (str !== '' && str !== '0' && str !== '-') {
+      const n = Number(str);
+      if (Number.isFinite(n)) opts.projectId = n;
+    }
+  }
+  const tagsRaw = src.tags;
+  if (Array.isArray(tagsRaw)) {
+    opts.tags = tagsRaw;
+  } else if (typeof tagsRaw === 'string' && tagsRaw.trim()) {
+    opts.tags = tagsRaw.split(',').map((t) => t.trim()).filter(Boolean);
+  }
+  return opts;
 }
 
 // Alias the pure time helper from the shared FSM module so existing
@@ -143,7 +183,8 @@ function clockIn(store, userId, input) {
       + (existing.key !== dateKey ? ` on ${existing.key}` : ''));
   }
   const day = state.days[dateKey] || { entries: [], note: '' };
-  const result = FSM.clockIn(day.entries, hm, uuid);
+  const opts = resolveSegmentOpts(store, userId, input);
+  const result = FSM.clockIn(day.entries, hm, uuid, opts);
   if (!result.ok) throw conflict(result.error);
   day.entries = result.entries;
   store.setDay(userId, dateKey, day);
@@ -180,7 +221,14 @@ function lunchToggle(store, userId, input) {
     if (hit) { day = hit.day; key = hit.key; }
   }
   if (!day) throw conflict('Not clocked in');
-  const result = FSM.lunchToggle(day.entries, hm, uuid);
+  // Lunch-end is the only transition that benefits from project hints:
+  // the caller might want to override the auto-inherited project. On
+  // lunch-start the hints are ignored.
+  const currentState = FSM.currentStatus(day.entries).state;
+  const opts = currentState === 'lunch'
+    ? resolveSegmentOpts(store, userId, input)
+    : undefined;
+  const result = FSM.lunchToggle(day.entries, hm, uuid, opts);
   if (!result.ok) throw conflict(result.error);
   day.entries = result.entries;
   store.setDay(userId, key, day);

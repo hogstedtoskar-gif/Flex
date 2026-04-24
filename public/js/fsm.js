@@ -78,7 +78,32 @@
     return null;
   }
 
-  function clockIn(entries, hm, makeId) {
+  /**
+   * Build a new segment, attaching projectId/tags when the caller
+   * provided them. Undefined/null/empty projectId means "untagged"
+   * and we leave the key off the object so the stored JSON stays
+   * small for the common case.
+   */
+  function makeSegment(makeId, type, hm, opts) {
+    const seg = { id: makeId(), type, start: hm, end: '' };
+    const o = opts || {};
+    if (o.projectId != null && o.projectId !== '') {
+      const n = Number(o.projectId);
+      if (Number.isFinite(n)) seg.projectId = n;
+    }
+    if (Array.isArray(o.tags) && o.tags.length) {
+      const cleaned = [];
+      for (const t of o.tags) {
+        if (typeof t !== 'string') continue;
+        const v = t.trim();
+        if (v) cleaned.push(v);
+      }
+      if (cleaned.length) seg.tags = cleaned;
+    }
+    return seg;
+  }
+
+  function clockIn(entries, hm, makeId, opts) {
     if (!parseHM(hm)) return { ok: false, error: 'Invalid time' };
     const st = currentStatus(entries);
     if (st.state !== 'off') {
@@ -89,9 +114,7 @@
     }
     return {
       ok: true,
-      entries: (entries || []).concat([{
-        id: makeId(), type: 'work', start: hm, end: ''
-      }])
+      entries: (entries || []).concat([makeSegment(makeId, 'work', hm, opts)])
     };
   }
 
@@ -121,25 +144,46 @@
     };
   }
 
-  function lunchEnd(entries, hm, makeId) {
+  /**
+   * End the current lunch. The resumed work segment defaults to the
+   * project / tags of the last work segment before the lunch (so the
+   * UI doesn't need to re-ask on every lunch break), but the caller
+   * can override with `opts.projectId` / `opts.tags`.
+   */
+  function lunchEnd(entries, hm, makeId, opts) {
     if (!parseHM(hm)) return { ok: false, error: 'Invalid time' };
     const st = currentStatus(entries);
     if (st.state !== 'lunch') {
       return { ok: false, error: 'Not on lunch' };
     }
+    // Derive defaults from the most recent closed work segment.
+    let inheritedProject = null;
+    let inheritedTags = null;
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const e = entries[i];
+      if (e && e.type === 'work' && e.start && e.end) {
+        if (e.projectId != null) inheritedProject = e.projectId;
+        if (Array.isArray(e.tags) && e.tags.length) inheritedTags = e.tags.slice();
+        break;
+      }
+    }
+    const merged = {
+      projectId: (opts && 'projectId' in opts) ? opts.projectId : inheritedProject,
+      tags: (opts && 'tags' in opts) ? opts.tags : inheritedTags
+    };
     return {
       ok: true,
       entries: entries
         .map((e) => e.id === st.openId ? { ...e, end: hm } : e)
-        .concat([{ id: makeId(), type: 'work', start: hm, end: '' }])
+        .concat([makeSegment(makeId, 'work', hm, merged)])
     };
   }
 
   /** Convenience: from 'working' go to lunch, from 'lunch' go back to work. */
-  function lunchToggle(entries, hm, makeId) {
+  function lunchToggle(entries, hm, makeId, opts) {
     const st = currentStatus(entries);
     if (st.state === 'working') return lunchStart(entries, hm, makeId);
-    if (st.state === 'lunch') return lunchEnd(entries, hm, makeId);
+    if (st.state === 'lunch') return lunchEnd(entries, hm, makeId, opts);
     return { ok: false, error: 'Not clocked in — can\'t toggle lunch' };
   }
 

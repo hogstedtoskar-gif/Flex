@@ -108,12 +108,20 @@
             <span class="today-date" data-today-date></span>
           </div>
           <div class="status-row" data-status></div>
+          <div class="project-picker" data-project-picker hidden>
+            <label>
+              <span>Project</span>
+              <select data-dashboard-project></select>
+            </label>
+            <span class="muted small" data-project-picker-hint></span>
+          </div>
           <div class="actions">
             <button class="btn btn-primary btn-lg" data-action="clock-in">Clock in</button>
             <button class="btn btn-warning btn-lg" data-action="lunch-start">Start lunch</button>
             <button class="btn btn-warning btn-lg" data-action="lunch-end">End lunch</button>
             <button class="btn btn-danger btn-lg" data-action="clock-out">Clock out</button>
           </div>
+          <div class="today-timeline" data-today-timeline></div>
           <div class="today-totals" data-today-totals></div>
         </div>
 
@@ -160,6 +168,14 @@
               <option value="append">Append to day</option>
             </select>
           </label>
+          <label data-manual-project-label hidden>
+            <span>Project <em class="muted small">(optional)</em></span>
+            <select name="projectId" data-manual-project></select>
+          </label>
+          <label>
+            <span>Tags <em class="muted small">(optional, comma-separated)</em></span>
+            <input type="text" name="tags" maxlength="200" placeholder="deep-work, review" />
+          </label>
           <div class="manual-actions">
             <button type="submit" class="btn btn-primary">Save entry</button>
             <button type="reset" class="btn btn-ghost">Clear</button>
@@ -203,6 +219,7 @@
           </div>
         </div>
         <div class="diary-day-summary" data-diary-summary></div>
+        <div class="diary-timeline" data-diary-timeline></div>
         <div class="diary-validation" data-diary-validation></div>
         <div class="diary-entries" data-diary-entries></div>
         <div class="diary-add">
@@ -228,6 +245,7 @@
           </div>
         </div>
         <div data-week-table></div>
+        <div class="project-breakdown-wrap" data-week-projects></div>
       </div>
 
       <div class="card">
@@ -241,6 +259,7 @@
         </div>
         <div data-month-table></div>
         <div data-month-chart class="chart-block"></div>
+        <div class="project-breakdown-wrap" data-month-projects></div>
       </div>
     </section>
   </template>
@@ -345,6 +364,12 @@
             <span>Opening flex applies from <em class="muted small">(optional — flex from this date onwards adds on top)</em></span>
             <input type="date" name="flexOpeningDate" />
           </label>
+          <label>
+            <span>Default project <em class="muted small">(applied to clock-in from widgets / when no project is picked)</em></span>
+            <select name="defaultProjectId" data-default-project>
+              <option value="">— None (untagged) —</option>
+            </select>
+          </label>
           <div class="form-actions">
             <button type="submit" class="btn btn-primary">Save settings</button>
           </div>
@@ -352,10 +377,37 @@
       </div>
 
       <div class="card">
+        <div class="card-header">
+          <h2>Projects</h2>
+          <span class="muted">tag work segments for reporting</span>
+        </div>
+        <p class="muted small">
+          Optional. Create projects to label your time — then pick one when you clock in,
+          or set a default above so iOS widget taps are automatically tagged.
+          Segments without a project show up as "Untagged" in summaries.
+        </p>
+        <form class="projects-create" data-projects-form>
+          <label class="projects-name-label">
+            <span>Name</span>
+            <input type="text" name="name" maxlength="64" placeholder="Project name" required />
+          </label>
+          <label class="projects-color-label">
+            <span>Color <em class="muted small">(optional)</em></span>
+            <input type="color" name="color" value="#4f8cff" />
+          </label>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Add project</button>
+          </div>
+        </form>
+        <div class="projects-list" data-projects-list></div>
+      </div>
+
+      <div class="card">
         <div class="card-header"><h2>Data</h2></div>
         <div class="data-actions">
           <button class="btn" data-action="export-json">Export JSON backup</button>
-          <button class="btn" data-action="export-csv">Export CSV</button>
+          <button class="btn" data-action="export-csv">Export CSV (daily)</button>
+          <button class="btn" data-action="export-segments-csv">Export CSV (segments)</button>
           <label class="btn btn-ghost file-label">
             Import JSON
             <input type="file" accept="application/json" data-import-file hidden />
@@ -451,6 +503,7 @@
   <script src="js/calc.js"></script>
   <script src="js/storage.js"></script>
   <script src="js/ui.js"></script>
+  <script src="js/timeline.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

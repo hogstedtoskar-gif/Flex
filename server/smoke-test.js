@@ -298,11 +298,118 @@ async function main() {
   // Restore session for the remaining tests.
   cookieJar = savedCookie;
 
-  console.log('\n[11] Reset + logout');
+  console.log('\n[11] Projects CRUD + tags on entries');
+  r = await req('GET', '/api/projects');
+  assert(r.status === 200 && Array.isArray(r.data.projects), 'GET /api/projects -> 200');
+  assert(r.data.projects.length === 0, 'no projects for fresh user');
+
+  r = await req('POST', '/api/projects', { name: 'Alpha', color: '#ff8800' });
+  assert(r.status === 201 && r.data && r.data.name === 'Alpha', 'create project Alpha -> 201');
+  const projAlphaId = r.data.id;
+  assert(r.data.color === '#ff8800', 'color persisted');
+
+  r = await req('POST', '/api/projects', { name: 'Alpha' });
+  assert(r.status === 409 || r.status === 400, 'duplicate project name rejected');
+
+  r = await req('POST', '/api/projects', { name: 'Beta', color: 'not-a-color' });
+  assert(
+    r.status === 400
+      || (r.status === 201 && (r.data.color === null || r.data.color === '')),
+    'invalid color rejected or coerced to empty'
+  );
+
+  r = await req('POST', '/api/projects', { name: 'Beta', color: '#00aaff' });
+  assert(r.status === 201 || r.status === 409, 'create project Beta handled');
+  let projBetaId = (r.status === 201 && r.data) ? r.data.id : null;
+  if (!projBetaId) {
+    const list = await req('GET', '/api/projects');
+    const beta = list.data.projects.find((p) => p.name === 'Beta');
+    projBetaId = beta && beta.id;
+  }
+  assert(projBetaId, 'Beta project id resolved');
+
+  r = await req('GET', '/api/projects');
+  assert(r.data.projects.length >= 2, 'list has at least 2 projects');
+
+  r = await req('PATCH', '/api/projects/' + projBetaId, { name: 'Beta Prime', color: '#44ee99' });
+  assert(r.status === 200 && r.data.name === 'Beta Prime', 'rename project');
+
+  r = await req('PATCH', '/api/projects/' + projBetaId, { archived: true });
+  assert(r.status === 200 && r.data.archived === true, 'archive project');
+
+  const tagDay = {
+    entries: [
+      { id: 'pa', type: 'work',  start: '08:00', end: '10:00',
+        projectId: projAlphaId, tags: ['deep-work', 'api'] },
+      { id: 'pl', type: 'lunch', start: '10:00', end: '10:30' },
+      { id: 'pb', type: 'work',  start: '10:30', end: '12:00',
+        projectId: projAlphaId, tags: ['review'] }
+    ],
+    note: ''
+  };
+  r = await req('PUT', '/api/days/2026-04-20', tagDay);
+  assert(r.status === 200, 'PUT day with project+tags -> 200');
+  assert(r.data && r.data.entries[0].projectId === projAlphaId, 'projectId round-trips');
+  assert(
+    Array.isArray(r.data.entries[0].tags) && r.data.entries[0].tags.includes('deep-work'),
+    'tags round-trip'
+  );
+  const lunch = r.data.entries.find((e) => e.type === 'lunch');
+  assert(!lunch.projectId && !(lunch.tags && lunch.tags.length), 'lunch segments have no project/tags');
+
+  const bogusDay = {
+    entries: [{
+      id: 'bg', type: 'work', start: '09:00', end: '10:00',
+      projectId: 999999, tags: ['x']
+    }],
+    note: ''
+  };
+  r = await req('PUT', '/api/days/2026-04-21', bogusDay);
+  assert(r.status === 200, 'PUT day with unknown projectId -> 200');
+  assert(r.data.entries[0].projectId == null, 'unknown projectId stripped');
+
+  r = await req('DELETE', '/api/projects/' + projAlphaId);
+  assert(r.status === 409 || r.status === 400, 'cannot delete referenced project');
+
+  await req('PUT', '/api/days/2026-04-20', { entries: [], note: '' });
+  await req('PUT', '/api/days/2026-04-21', { entries: [], note: '' });
+  r = await req('DELETE', '/api/projects/' + projAlphaId);
+  assert(r.status === 204 || r.status === 200, 'delete unreferenced project');
+
+  r = await req('GET', '/api/state');
+  assert(Array.isArray(r.data.projects), '/api/state returns projects[]');
+
+  // Quick clock-in carries projectId when passed
+  r = await req('POST', '/api/auth/tokens', { label: 'smoke proj' });
+  assert(r.status === 201, 'create token for project quick test');
+  const projToken = r.data.token;
+  const projTokenId = r.data.id;
+
+  const headersProj = { Authorization: 'Bearer ' + projToken };
+  r = await req('POST',
+    '/api/quick/clock-in?tz=UTC&time=09:00&project=' + projBetaId + '&tags=focus,proj',
+    undefined, headersProj);
+  assert(r.status === 200 && r.data.state === 'working', 'quick clock-in with project -> working');
+  r = await req('POST', '/api/quick/clock-out?tz=UTC&time=10:30', undefined, headersProj);
+  assert(r.status === 200 && r.data.state === 'off', 'quick clock-out -> off');
+
+  r = await req('GET', '/api/state');
+  const pdKeys = Object.keys(r.data.days);
+  const lastKey = pdKeys.sort()[pdKeys.length - 1];
+  const projEntry = r.data.days[lastKey].entries.find((e) => e.type === 'work' && e.end);
+  assert(projEntry && projEntry.projectId === projBetaId, 'quick-action segment carries projectId');
+  assert(projEntry && Array.isArray(projEntry.tags) && projEntry.tags.includes('focus'),
+    'quick-action segment carries tags');
+
+  await req('DELETE', '/api/auth/tokens/' + projTokenId);
+
+  console.log('\n[12] Reset + logout');
   r = await req('POST', '/api/reset');
   assert(r.status === 200, 'reset -> 200');
   assert(r.data && Object.keys(r.data.days).length === 0, 'days empty after reset');
   assert(r.data && r.data.settings.regularHoursPerDay === 8, 'settings back to defaults after reset');
+  assert(r.data && Array.isArray(r.data.projects) && r.data.projects.length === 0,
+    'projects cleared after reset');
 
   r = await req('POST', '/api/auth/logout');
   assert(r.status === 204, 'logout -> 204');

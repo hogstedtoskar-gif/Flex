@@ -300,7 +300,9 @@ function resolveQuickInput(req) {
   return {
     tz: (req.body && req.body.tz) || req.query.tz || '',
     date: (req.body && req.body.date) || req.query.date || '',
-    time: (req.body && req.body.time) || req.query.time || ''
+    time: (req.body && req.body.time) || req.query.time || '',
+    project: (req.body && req.body.project) || req.query.project || '',
+    tags: (req.body && req.body.tags) || req.query.tags || ''
   };
 }
 
@@ -364,6 +366,40 @@ api.delete('/days/:date', (req, res, next) => {
 api.post('/reset', (req, res, next) => {
   try { res.json(store.resetUser(req.user.id)); }
   catch (err) { next(err); }
+});
+
+/* -------- projects -------- */
+
+api.get('/projects', (req, res, next) => {
+  try { res.json({ projects: store.listProjects(req.user.id) }); }
+  catch (err) { next(err); }
+});
+
+api.post('/projects', (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const row = store.createProject(req.user.id, { name: body.name, color: body.color });
+    res.status(201).json(row);
+  } catch (err) { next(err); }
+});
+
+api.patch('/projects/:id', (req, res, next) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) throw httpErr(400, 'bad project id');
+    const row = store.updateProject(req.user.id, id, req.body || {});
+    res.json(row);
+  } catch (err) { next(err); }
+});
+
+api.delete('/projects/:id', (req, res, next) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) throw httpErr(400, 'bad project id');
+    const ok = store.deleteProject(req.user.id, id);
+    if (!ok) return res.status(404).json({ error: 'not found' });
+    res.status(204).end();
+  } catch (err) { next(err); }
 });
 
 app.use('/api', api);

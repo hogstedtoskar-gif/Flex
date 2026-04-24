@@ -629,6 +629,49 @@ const Calc = (() => {
     return year + '-W' + pad(week);
   }
 
+  /**
+   * Aggregate total worked minutes per project across a set of days.
+   *
+   * Segments without a `projectId` are bucketed under `''` (meaning
+   * "untagged"). Lunch segments are ignored — tags apply to work
+   * only.
+   *
+   * Returns a sorted array: [{ projectId, hours, segmentCount, tags: Set }]
+   * with `projectId === ''` representing untagged, sorted by hours desc.
+   */
+  function aggregateByProject(daysMap, fromKey, toKey) {
+    const buckets = new Map();
+    const keys = Object.keys(daysMap || {}).sort();
+    for (const key of keys) {
+      if (fromKey && key < fromKey) continue;
+      if (toKey && key > toKey) continue;
+      const day = daysMap[key];
+      const entries = (day && day.entries) || [];
+      for (const e of entries) {
+        if (e.type !== 'work') continue;
+        if (!e.start || !e.end) continue;
+        const mins = entryMinutes(e);
+        if (!mins) continue;
+        const pid = e.projectId != null ? String(e.projectId) : '';
+        if (!buckets.has(pid)) {
+          buckets.set(pid, { projectId: pid, minutes: 0, segmentCount: 0, tags: new Set() });
+        }
+        const b = buckets.get(pid);
+        b.minutes += mins;
+        b.segmentCount++;
+        if (Array.isArray(e.tags)) for (const t of e.tags) b.tags.add(t);
+      }
+    }
+    return Array.from(buckets.values())
+      .map((b) => ({
+        projectId: b.projectId,
+        hours: b.minutes / 60,
+        segmentCount: b.segmentCount,
+        tags: Array.from(b.tags).sort()
+      }))
+      .sort((a, b) => b.hours - a.hours);
+  }
+
   function parseIsoWeek(str) {
     // "YYYY-Www"
     const m = /^(\d{4})-W(\d{2})$/.exec(str);
@@ -672,6 +715,7 @@ const Calc = (() => {
     globalStatus,
     isoWeek,
     isoWeekString,
-    parseIsoWeek
+    parseIsoWeek,
+    aggregateByProject
   };
 })();

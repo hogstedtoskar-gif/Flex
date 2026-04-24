@@ -30,14 +30,18 @@ const Storage = (() => {
     // 0=Sun, 1=Mon, ..., 6=Sat). On non-working days, worked hours are
     // treated overtime-only (just like "outside office hours") and the
     // day never contributes shortfall.
-    workDays: [false, true, true, true, true, true, false]
+    workDays: [false, true, true, true, true, true, false],
+    // Optional default project applied to new work segments when
+    // nothing explicit is picked.
+    defaultProjectId: ''
   };
 
   function emptyState() {
     return {
       version: 1,
       settings: { ...DEFAULT_SETTINGS },
-      days: {}
+      days: {},
+      projects: []
     };
   }
 
@@ -171,11 +175,27 @@ const Storage = (() => {
       const merged = emptyState();
       merged.settings = { ...merged.settings, ...((state && state.settings) || {}) };
       merged.days = (state && state.days) || {};
+      merged.projects = Array.isArray(state && state.projects) ? state.projects : [];
       return merged;
     } catch (err) {
       console.error('Failed to load state from server:', err);
       throw err;
     }
+  }
+
+  /* -------- projects -------- */
+  async function listProjects() {
+    const data = await http('/projects');
+    return (data && data.projects) || [];
+  }
+  async function createProject(name, color) {
+    return http('/projects', { method: 'POST', body: { name, color: color || null } });
+  }
+  async function updateProject(id, patch) {
+    return http('/projects/' + encodeURIComponent(id), { method: 'PATCH', body: patch });
+  }
+  async function deleteProject(id) {
+    await http('/projects/' + encodeURIComponent(id), { method: 'DELETE' });
   }
 
   // -------- per-day persistence with debounced coalescing --------
@@ -307,11 +327,12 @@ const Storage = (() => {
     const state = emptyState();
     state.settings = { ...state.settings, ...(parsed.settings || {}) };
     state.days = parsed.days;
+    state.projects = Array.isArray(parsed.projects) ? parsed.projects : [];
     pendingDays.clear();
     pendingSettings = null;
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-    await http('/state', { method: 'PUT', body: state });
-    return state;
+    const returned = await http('/state', { method: 'PUT', body: state });
+    return returned || state;
   }
 
   function uuid() {
@@ -327,13 +348,22 @@ const Storage = (() => {
 
   function exportCsv(state) {
     const settings = state.settings;
+    const projectById = new Map(
+      (state.projects || []).map((p) => [Number(p.id), p])
+    );
+    const projectLabel = (pid) => {
+      if (pid == null || pid === '') return '';
+      const p = projectById.get(Number(pid));
+      return p ? p.name : ('#' + pid);
+    };
+
     const keys = Object.keys(state.days).sort();
     const rows = [[
       'Date', 'Weekday', 'Worked (h)', 'In Office (h)', 'Outside (h)',
       'Regular (h)', 'Extra (h)',
       'Overtime (h)', 'Flex gain (h)', 'Outside unused (h)',
       'Shortfall (h)', 'Lunch (h)', 'Auto-lunch deduction (h)',
-      'In Period', 'Segments', 'Note'
+      'In Period', 'Projects (h)', 'Tags', 'Segments', 'Note'
     ]];
 
     const byWeek = new Map();
@@ -363,9 +393,43 @@ const Storage = (() => {
       const date = Calc.parseDateKey(key);
       const c = Calc.computeDay(day, settings, date);
       const alloc = dayAlloc.get(key) || { overtime: 0, flexGain: 0, outsideUnused: 0, inPeriod: false };
-      const segStr = (day.entries || [])
-        .map(e => `${e.type[0].toUpperCase()}:${e.start || '--:--'}-${e.end || '--:--'}`)
+      const entries = day.entries || [];
+
+      // Per-day totals bucketed by project (work segments only).
+      const byProject = new Map();
+      const allTags = new Set();
+      for (const e of entries) {
+        if (e.type !== 'work' || !e.start || !e.end) continue;
+        const mins = Calc.entryMinutes(e);
+        if (!mins) continue;
+        const key2 = e.projectId != null ? String(e.projectId) : '';
+        byProject.set(key2, (byProject.get(key2) || 0) + mins);
+        if (Array.isArray(e.tags)) for (const t of e.tags) allTags.add(t);
+      }
+      const projectsCell = Array.from(byProject.entries())
+        .sort((a, b) => b[1] - a[1])
+        .map(([pid, mins]) => {
+          const label = pid === '' ? 'Untagged' : projectLabel(pid);
+          return label + ':' + (mins / 60).toFixed(2) + 'h';
+        })
+        .join('; ');
+      const tagsCell = Array.from(allTags).sort().join(', ');
+
+      const segStr = entries
+        .map((e) => {
+          const type = (e.type || '?')[0].toUpperCase();
+          const base = `${type}:${e.start || '--:--'}-${e.end || '--:--'}`;
+          const extras = [];
+          if (e.type === 'work' && e.projectId != null) {
+            extras.push(projectLabel(e.projectId));
+          }
+          if (Array.isArray(e.tags) && e.tags.length) {
+            extras.push('#' + e.tags.join(' #'));
+          }
+          return extras.length ? `${base} [${extras.join(' ')}]` : base;
+        })
         .join(' | ');
+
       rows.push([
         key,
         weekdayNames[date.getDay()],
@@ -381,6 +445,8 @@ const Storage = (() => {
         c.lunchHours.toFixed(2),
         (c.lunchDeduction || 0).toFixed(2),
         alloc.inPeriod ? 'yes' : 'no',
+        projectsCell,
+        tagsCell,
         segStr,
         (day.note || '').replace(/\r?\n/g, ' ')
       ]);
@@ -389,6 +455,70 @@ const Storage = (() => {
     const csv = rows.map(r => r.map(csvEscape).join(',')).join('\r\n');
     const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
     triggerDownload(blob, 'timetracker-' + Calc.toDateKey(new Date()) + '.csv');
+  }
+
+  /**
+   * Fine-grained per-segment CSV: one row per time entry. Useful for
+   * slicing project/tag totals externally (pivot tables, BI tools).
+   */
+  function exportSegmentsCsv(state) {
+    const settings = state.settings;
+    const projectById = new Map(
+      (state.projects || []).map((p) => [Number(p.id), p])
+    );
+    const keys = Object.keys(state.days).sort();
+    const weekdayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const officeWin = Calc.officeWindow(settings);
+
+    const rows = [[
+      'Date', 'Weekday', 'Segment #', 'Type',
+      'Start', 'End', 'Duration (h)',
+      'Project ID', 'Project', 'Project color', 'Project archived',
+      'Tags', 'In office (h)', 'Outside (h)', 'Note'
+    ]];
+
+    for (const key of keys) {
+      const day = state.days[key];
+      const date = Calc.parseDateKey(key);
+      const entries = day.entries || [];
+      const note = (day.note || '').replace(/\r?\n/g, ' ');
+      entries.forEach((e, i) => {
+        const mins = Calc.entryMinutes(e);
+        const hours = mins ? (mins / 60) : 0;
+        let inOffice = 0;
+        if (mins && e.type === 'work') {
+          try {
+            const split = Calc.entryOfficeSplit(e, officeWin);
+            if (split && typeof split.inOffice === 'number') {
+              inOffice = split.inOffice / 60;
+            }
+          } catch (_) { /* ignore */ }
+        }
+        const outside = Math.max(0, hours - inOffice);
+        const p = e.projectId != null ? projectById.get(Number(e.projectId)) : null;
+        rows.push([
+          key,
+          weekdayNames[date.getDay()],
+          String(i + 1),
+          e.type || '',
+          e.start || '',
+          e.end || '',
+          hours.toFixed(2),
+          e.projectId != null ? String(e.projectId) : '',
+          p ? p.name : '',
+          p && p.color ? p.color : '',
+          p && p.archived ? 'yes' : '',
+          Array.isArray(e.tags) ? e.tags.join(', ') : '',
+          inOffice.toFixed(2),
+          outside.toFixed(2),
+          i === 0 ? note : ''
+        ]);
+      });
+    }
+
+    const csv = rows.map(r => r.map(csvEscape).join(',')).join('\r\n');
+    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
+    triggerDownload(blob, 'timetracker-segments-' + Calc.toDateKey(new Date()) + '.csv');
   }
 
   function csvEscape(v) {
@@ -421,6 +551,7 @@ const Storage = (() => {
     uuid,
     exportJson,
     exportCsv,
+    exportSegmentsCsv,
     importJson,
     setErrorHandler,
     setUnauthorizedHandler,
@@ -434,6 +565,10 @@ const Storage = (() => {
     createToken,
     deleteToken,
     quickStatus,
-    quickAction
+    quickAction,
+    listProjects,
+    createProject,
+    updateProject,
+    deleteProject
   };
 })();

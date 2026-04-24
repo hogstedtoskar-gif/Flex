@@ -16,7 +16,10 @@
     })(),
     ready: false,
     user: null,
-    authView: 'login' // 'login' | 'register'
+    authView: 'login', // 'login' | 'register'
+    // Project currently selected on the Dashboard picker. '' = untagged.
+    // Initialised on first dashboard render from settings.defaultProjectId.
+    dashProjectId: null
   };
 
   /* =========================================================
@@ -47,6 +50,181 @@
     if ((!d.entries || !d.entries.length) && !d.note) {
       delete App.state.days[key];
     }
+  }
+
+  /* =========================================================
+     PROJECT helpers — shared across views.
+     ========================================================= */
+  function activeProjects() {
+    return (App.state.projects || []).filter((p) => !p.archived);
+  }
+
+  function allProjects() {
+    return App.state.projects || [];
+  }
+
+  function projectById(id) {
+    if (id == null || id === '') return null;
+    const n = Number(id);
+    if (!Number.isFinite(n)) return null;
+    return (App.state.projects || []).find((p) => p.id === n) || null;
+  }
+
+  // Split a comma-separated tag string into a deduped array.
+  // Matches the server's sanitisation (10 max, 32 chars each) so
+  // the UI never shows more than it can save.
+  function parseTagsInput(raw) {
+    if (!raw) return [];
+    const out = [];
+    const seen = new Set();
+    for (const chunk of String(raw).split(',')) {
+      const v = chunk.trim().slice(0, 32);
+      if (!v) continue;
+      const key = v.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(v);
+      if (out.length >= 10) break;
+    }
+    return out;
+  }
+
+  // Fill a <select> with the user's projects. `selectedId` is coerced
+  // to a string for comparison; an empty string represents "untagged".
+  function populateProjectSelect(select, selectedId, opts) {
+    if (!select) return;
+    const options = opts || {};
+    const includeUntagged = options.includeUntagged !== false;
+    const untaggedLabel = options.untaggedLabel || '— Untagged —';
+    const includeArchived = !!options.includeArchived;
+    const archivedIdToKeep = options.keepArchivedId != null ? Number(options.keepArchivedId) : null;
+    UI.clear(select);
+    if (includeUntagged) {
+      select.appendChild(UI.el('option', { value: '', text: untaggedLabel }));
+    }
+    const pool = allProjects();
+    const wanted = selectedId != null ? String(selectedId) : '';
+    for (const p of pool) {
+      if (p.archived && !includeArchived && p.id !== archivedIdToKeep) continue;
+      const label = p.name + (p.archived ? ' (archived)' : '');
+      const opt = UI.el('option', { value: String(p.id), text: label });
+      if (String(p.id) === wanted) opt.selected = true;
+      select.appendChild(opt);
+    }
+  }
+
+  function setupProjectsUI(view) {
+    const form = view.querySelector('[data-projects-form]');
+    const listEl = view.querySelector('[data-projects-list]');
+    if (!form || !listEl) return;
+
+    function paint() {
+      UI.clear(listEl);
+      const projects = allProjects();
+      if (!projects.length) {
+        listEl.appendChild(UI.el('div', {
+          class: 'projects-empty',
+          text: 'No projects yet. Add one above to start labelling your time.'
+        }));
+        return;
+      }
+      for (const p of projects) {
+        listEl.appendChild(projectRow(p));
+      }
+    }
+
+    function projectRow(p) {
+      const row = UI.el('div', { class: 'projects-row' + (p.archived ? ' archived' : '') });
+      const swatch = UI.el('span', {
+        class: 'project-swatch',
+        style: p.color ? 'background:' + p.color : ''
+      });
+      const nameInput = UI.el('input', {
+        type: 'text',
+        class: 'project-name-input',
+        value: p.name,
+        maxlength: '64'
+      });
+      const colorInput = UI.el('input', {
+        type: 'color',
+        class: 'project-color-input',
+        value: p.color || '#4f8cff'
+      });
+
+      async function patch(fields) {
+        try {
+          const updated = await Storage.updateProject(p.id, fields);
+          const idx = App.state.projects.findIndex((x) => x.id === p.id);
+          if (idx >= 0) App.state.projects[idx] = updated;
+          // When a project is renamed/archived, refresh dependent views.
+          render();
+        } catch (err) {
+          UI.toast('Update failed: ' + prettifyError(err), 'error');
+          paint();
+        }
+      }
+
+      nameInput.addEventListener('change', () => {
+        const next = nameInput.value.trim();
+        if (!next || next === p.name) { nameInput.value = p.name; return; }
+        patch({ name: next });
+      });
+      colorInput.addEventListener('change', () => {
+        const next = colorInput.value;
+        if (next === p.color) return;
+        patch({ color: next });
+      });
+
+      const archiveBtn = UI.el('button', {
+        class: 'btn btn-ghost btn-sm',
+        text: p.archived ? 'Restore' : 'Archive'
+      });
+      archiveBtn.addEventListener('click', () => patch({ archived: !p.archived }));
+
+      const delBtn = UI.el('button', { class: 'btn btn-ghost btn-sm', text: 'Delete' });
+      delBtn.addEventListener('click', async () => {
+        if (!UI.confirmDialog('Delete "' + p.name + '"? This only works if no entries reference it — otherwise archive it.')) return;
+        try {
+          await Storage.deleteProject(p.id);
+          App.state.projects = App.state.projects.filter((x) => x.id !== p.id);
+          UI.toast('Project deleted', 'info');
+          render();
+        } catch (err) {
+          UI.toast(prettifyError(err), 'error');
+        }
+      });
+
+      row.appendChild(swatch);
+      row.appendChild(nameInput);
+      row.appendChild(colorInput);
+      row.appendChild(archiveBtn);
+      row.appendChild(delBtn);
+      return row;
+    }
+
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const f = form.elements;
+      const name = (f['name'].value || '').trim();
+      const color = f['color'].value || null;
+      if (!name) return;
+      const submit = form.querySelector('button[type="submit"]');
+      submit.disabled = true;
+      try {
+        const p = await Storage.createProject(name, color);
+        App.state.projects.push(p);
+        form.reset();
+        f['color'].value = '#4f8cff';
+        UI.toast('Project "' + p.name + '" created', 'success');
+        render();
+      } catch (err) {
+        UI.toast(prettifyError(err), 'error');
+      } finally {
+        submit.disabled = false;
+      }
+    });
+
+    paint();
   }
 
   function setView(name) {
@@ -223,7 +401,18 @@
     } else if (status.lastEntry) {
       statusText = 'Last clock-out ' + (status.lastEntry.end || '?');
     }
-    statusEl.appendChild(UI.el('span', { text: statusText }));
+    const statusLeft = UI.el('span', {}, [statusText]);
+    if (status.state !== 'off' && status.openEntry && status.openEntry.projectId != null) {
+      const p = projectById(status.openEntry.projectId);
+      if (p) {
+        statusLeft.appendChild(UI.el('span', {
+          class: 'project-chip',
+          style: p.color ? 'background:' + p.color : '',
+          text: p.name
+        }));
+      }
+    }
+    statusEl.appendChild(statusLeft);
     if ((status.state === 'working' || status.state === 'lunch') && status.openEntry && status.openEntry.start) {
       statusEl.appendChild(UI.el('span', {
         class: 'muted',
@@ -234,6 +423,40 @@
       }));
     } else {
       statusEl.appendChild(UI.el('span', { class: 'muted', text: '—' }));
+    }
+
+    // Project picker: shown only when the user has at least one project.
+    // The selection is used for clock-in (new work segment) and for
+    // lunch-end (resume work). On first render we seed it from the
+    // default in settings.
+    const pickerWrap = view.querySelector('[data-project-picker]');
+    const pickerSel = view.querySelector('[data-dashboard-project]');
+    const pickerHint = view.querySelector('[data-project-picker-hint]');
+    const haveProjects = activeProjects().length > 0;
+    if (pickerWrap) pickerWrap.hidden = !haveProjects;
+    if (haveProjects && pickerSel) {
+      if (App.dashProjectId == null) {
+        App.dashProjectId = String(settings.defaultProjectId || '');
+      }
+      populateProjectSelect(pickerSel, App.dashProjectId, {
+        includeUntagged: true,
+        untaggedLabel: '— Untagged —'
+      });
+      pickerSel.addEventListener('change', () => {
+        App.dashProjectId = pickerSel.value;
+        updateProjectHint();
+      });
+      const updateProjectHint = () => {
+        if (!pickerHint) return;
+        if (status.state === 'working') {
+          pickerHint.textContent = 'Next segment (after lunch or re-clock in) uses this project.';
+        } else if (status.state === 'lunch') {
+          pickerHint.textContent = 'End lunch to resume work with this project.';
+        } else {
+          pickerHint.textContent = 'Applied when you clock in.';
+        }
+      };
+      updateProjectHint();
     }
 
     const btnIn = view.querySelector('[data-action="clock-in"]');
@@ -250,12 +473,25 @@
     // last night), transitions operate on THAT day, not today, so the
     // segment finally closes where it was opened.
     const openKey = status.openDateKey || todayKey;
-    btnIn.addEventListener('click', () => clockIn(todayKey));
+    const pickerProjectId = () => (pickerSel ? pickerSel.value : '');
+    btnIn.addEventListener('click', () => clockIn(todayKey, { projectId: pickerProjectId() }));
     btnOut.addEventListener('click', () => clockOut(openKey));
     btnLunchStart.addEventListener('click', () => lunchStart(openKey));
-    btnLunchEnd.addEventListener('click', () => lunchEnd(openKey));
+    btnLunchEnd.addEventListener('click', () => lunchEnd(openKey, { projectId: pickerProjectId() }));
 
     const c = Calc.computeDay(dayForLiveTotals(day, status), settings, today);
+
+    const todayTimeline = view.querySelector('[data-today-timeline]');
+    if (todayTimeline && typeof Timeline !== 'undefined') {
+      todayTimeline.appendChild(Timeline.render({
+        entries: (day && day.entries) || [],
+        settings,
+        projects: App.state.projects || [],
+        now: new Date(),
+        showNow: true
+      }));
+    }
+
     const todayTotals = view.querySelector('[data-today-totals]');
     todayTotals.appendChild(UI.stat('Worked', Calc.formatHours(c.workedHours)));
     todayTotals.appendChild(UI.stat('Regular', Calc.formatHours(c.regular)));
@@ -426,7 +662,7 @@
     };
   }
 
-  function clockIn(dateKey) {
+  function clockIn(dateKey, opts) {
     // Block new clock-in if there's an open segment on ANY day.
     // Previously this only looked at today, which let a forgotten
     // clock-out on a previous day coexist with a new clock-in today.
@@ -441,12 +677,26 @@
       return;
     }
     const day = ensureDay(dateKey);
-    const result = FSM.clockIn(day.entries, nowHM(), Storage.uuid);
+    const fsmOpts = normaliseProjectOpts(opts, App.state.settings);
+    const result = FSM.clockIn(day.entries, nowHM(), Storage.uuid, fsmOpts);
     if (!result.ok) { UI.toast(result.error, 'error'); return; }
     day.entries = result.entries;
     persistDay(dateKey);
     UI.toast('Clocked in', 'success');
     render();
+  }
+
+  // Accepts either { projectId } or nothing. Falls back to
+  // settings.defaultProjectId when the caller didn't pass one.
+  function normaliseProjectOpts(opts, settings) {
+    const out = {};
+    let pid = opts && 'projectId' in opts ? opts.projectId : undefined;
+    if (pid === undefined) pid = (settings && settings.defaultProjectId) || '';
+    if (pid != null && pid !== '') {
+      const n = Number(pid);
+      if (Number.isFinite(n)) out.projectId = n;
+    }
+    return out;
   }
 
   function resolveOpenDay(expectedType, preferredKey) {
@@ -505,13 +755,26 @@
     render();
   }
 
-  function lunchEnd(dateKey) {
+  function lunchEnd(dateKey, opts) {
     const open = resolveOpenDay('lunch', dateKey);
     if (!open) {
       UI.toast('Not on lunch', 'error');
       return;
     }
-    const result = FSM.lunchEnd(open.day.entries, nowHM(), Storage.uuid);
+    // If the caller didn't explicitly pass a project (e.g. from a
+    // hotkey), let FSM.lunchEnd inherit from the previous work
+    // segment. Only when the dashboard picker forces a value do we
+    // override.
+    let fsmOpts;
+    if (opts && 'projectId' in opts) {
+      fsmOpts = { projectId: opts.projectId };
+      if (fsmOpts.projectId === '' || fsmOpts.projectId == null) fsmOpts.projectId = null;
+      else {
+        const n = Number(fsmOpts.projectId);
+        fsmOpts.projectId = Number.isFinite(n) ? n : null;
+      }
+    }
+    const result = FSM.lunchEnd(open.day.entries, nowHM(), Storage.uuid, fsmOpts);
     if (!result.ok) { UI.toast(result.error, 'error'); return; }
     open.day.entries = result.entries;
     persistDay(open.dateKey);
@@ -526,6 +789,17 @@
 
     UI.upgradeTime24Inputs(form);
     form.elements['date'].value = Calc.toDateKey(new Date());
+
+    const projectLabel = view.querySelector('[data-manual-project-label]');
+    const projectSel = view.querySelector('[data-manual-project]');
+    if (projectSel) {
+      const haveProjects = activeProjects().length > 0;
+      if (projectLabel) projectLabel.hidden = !haveProjects;
+      populateProjectSelect(projectSel, App.state.settings.defaultProjectId || '', {
+        includeUntagged: true,
+        untaggedLabel: '— Untagged —'
+      });
+    }
 
     form.addEventListener('submit', (ev) => {
       ev.preventDefault();
@@ -572,6 +846,18 @@
         return;
       }
 
+      // Project + tags apply to the WORK segments we create. A
+      // lunch segment never carries a project (it's non-work time).
+      const projectIdRaw = f['projectId'] ? f['projectId'].value : '';
+      const projectId = projectIdRaw && Number.isFinite(Number(projectIdRaw))
+        ? Number(projectIdRaw)
+        : null;
+      const tagsRaw = f['tags'] ? f['tags'].value : '';
+      const tags = parseTagsInput(tagsRaw);
+      const workExtras = {};
+      if (projectId != null) workExtras.projectId = projectId;
+      if (tags.length) workExtras.tags = tags;
+
       const newSegments = [];
       if (hasLunch) {
         const lsRaw = Calc.parseHM(lunchStart);
@@ -593,11 +879,11 @@
           errEl.textContent = 'Lunch must fall within clock in and clock out.';
           return;
         }
-        newSegments.push({ id: Storage.uuid(), type: 'work', start: clockIn, end: lunchStart });
+        newSegments.push({ id: Storage.uuid(), type: 'work', start: clockIn, end: lunchStart, ...workExtras });
         newSegments.push({ id: Storage.uuid(), type: 'lunch', start: lunchStart, end: lunchEnd });
-        newSegments.push({ id: Storage.uuid(), type: 'work', start: lunchEnd, end: clockOut });
+        newSegments.push({ id: Storage.uuid(), type: 'work', start: lunchEnd, end: clockOut, ...workExtras });
       } else {
-        newSegments.push({ id: Storage.uuid(), type: 'work', start: clockIn, end: clockOut });
+        newSegments.push({ id: Storage.uuid(), type: 'work', start: clockIn, end: clockOut, ...workExtras });
       }
 
       const day = ensureDay(date);
@@ -681,6 +967,18 @@
         '−' + Calc.formatHours(c.lunchDeduction),
         'negative'
       ));
+    }
+
+    const todayKey = Calc.toDateKey(new Date());
+    const diaryTimelineEl = view.querySelector('[data-diary-timeline]');
+    if (diaryTimelineEl && typeof Timeline !== 'undefined') {
+      diaryTimelineEl.appendChild(Timeline.render({
+        entries: day.entries || [],
+        settings,
+        projects: App.state.projects || [],
+        now: new Date(),
+        showNow: key === todayKey
+      }));
     }
 
     const validation = Calc.validateDay(day.entries || []);
@@ -797,6 +1095,54 @@
     row.appendChild(durEl);
     row.appendChild(actions);
 
+    // Optional meta row: project + tags. Only meaningful for work
+    // segments; lunch rows get an explanatory placeholder so the
+    // grid alignment stays consistent. Shown when the user has any
+    // projects, or when this entry already carries a project/tags.
+    const hasAnyProjects = activeProjects().length > 0
+      || (App.state.projects || []).some((p) => p.id === Number(entry.projectId));
+    const hasMeta = entry.projectId != null || (Array.isArray(entry.tags) && entry.tags.length);
+    if (hasAnyProjects || hasMeta) {
+      const meta = UI.el('div', { class: 'entry-meta' });
+      if (entry.type === 'work') {
+        const projectSel = UI.el('select', { class: 'entry-project' });
+        populateProjectSelect(projectSel, entry.projectId != null ? String(entry.projectId) : '', {
+          includeUntagged: true,
+          untaggedLabel: '— Untagged —',
+          includeArchived: false,
+          keepArchivedId: entry.projectId
+        });
+        projectSel.addEventListener('change', () => {
+          const val = projectSel.value;
+          const patch = {};
+          if (!val) patch.projectId = null;
+          else {
+            const n = Number(val);
+            patch.projectId = Number.isFinite(n) ? n : null;
+          }
+          updateEntry(dateKey, entry.id, patch);
+        });
+        const tagsInput = UI.el('input', {
+          type: 'text',
+          class: 'entry-tags',
+          placeholder: 'tags, comma-separated',
+          maxlength: '200',
+          value: Array.isArray(entry.tags) ? entry.tags.join(', ') : ''
+        });
+        tagsInput.addEventListener('change', () => {
+          updateEntry(dateKey, entry.id, { tags: parseTagsInput(tagsInput.value) });
+        });
+        meta.appendChild(projectSel);
+        meta.appendChild(tagsInput);
+      } else {
+        meta.appendChild(UI.el('span', {
+          class: 'muted small',
+          text: 'Lunch segments are not tagged.'
+        }));
+      }
+      row.appendChild(meta);
+    }
+
     if (errorMsg) row.title = errorMsg;
     return row;
   }
@@ -805,6 +1151,20 @@
     const day = ensureDay(dateKey);
     const e = (day.entries || []).find(x => x.id === entryId);
     if (!e) return;
+    // Normalise tags: accept array or comma-string.
+    if ('tags' in patch) {
+      if (typeof patch.tags === 'string') patch.tags = parseTagsInput(patch.tags);
+      if (!Array.isArray(patch.tags) || patch.tags.length === 0) {
+        delete e.tags;
+        delete patch.tags;
+      }
+    }
+    // A null projectId means "untagged" — drop the field entirely so
+    // the JSON blob stays compact for the common case.
+    if ('projectId' in patch && (patch.projectId == null || patch.projectId === '')) {
+      delete e.projectId;
+      delete patch.projectId;
+    }
     Object.assign(e, patch);
     persistDay(dateKey);
     render();
@@ -860,6 +1220,14 @@
     const weekTableContainer = view.querySelector('[data-week-table]');
     weekTableContainer.appendChild(renderWeekTable(week));
 
+    const weekProjectsEl = view.querySelector('[data-week-projects]');
+    if (weekProjectsEl) {
+      const fromKey = Calc.toDateKey(week.weekStart);
+      const toKey = Calc.toDateKey(week.weekEnd);
+      const breakdown = Calc.aggregateByProject(App.state.days, fromKey, toKey);
+      weekProjectsEl.appendChild(renderProjectBreakdown('By project (this week)', breakdown));
+    }
+
     const monthPicker = view.querySelector('[data-month-picker]');
     monthPicker.value = App.monthPicker;
     monthPicker.addEventListener('change', () => {
@@ -889,6 +1257,94 @@
       ));
     }
     monthChart.appendChild(UI.chartLegend());
+
+    const monthProjectsEl = view.querySelector('[data-month-projects]');
+    if (monthProjectsEl) {
+      const monthFirst = new Date(mYear, mMonth - 1, 1);
+      const monthLast = new Date(mYear, mMonth, 0);
+      const breakdown = Calc.aggregateByProject(
+        App.state.days,
+        Calc.toDateKey(monthFirst),
+        Calc.toDateKey(monthLast)
+      );
+      monthProjectsEl.appendChild(renderProjectBreakdown('By project (this month)', breakdown));
+    }
+  }
+
+  // Render a table: project | hours | % of total | segments.
+  // Untagged is always last; `tags` for each row feed a small chip
+  // strip under the project name.
+  function renderProjectBreakdown(title, rows) {
+    const wrap = UI.el('div', { class: 'project-breakdown' });
+    wrap.appendChild(UI.el('h3', { class: 'project-breakdown-title', text: title }));
+
+    if (!rows.length) {
+      wrap.appendChild(UI.el('div', {
+        class: 'muted small',
+        text: 'No work segments in this period.'
+      }));
+      return wrap;
+    }
+
+    const total = rows.reduce((n, r) => n + r.hours, 0) || 1;
+    const table = UI.el('table', { class: 'data-table project-table' });
+    const thead = UI.el('thead');
+    thead.appendChild(rowEl('th', ['Project', 'Hours', 'Share', 'Segments']));
+    table.appendChild(thead);
+
+    const tbody = UI.el('tbody');
+    // Sort so that untagged appears last, otherwise keep the hours-desc order.
+    const sorted = rows.slice().sort((a, b) => {
+      if (a.projectId === '' && b.projectId !== '') return 1;
+      if (b.projectId === '' && a.projectId !== '') return -1;
+      return b.hours - a.hours;
+    });
+    for (const r of sorted) {
+      const p = r.projectId ? projectById(r.projectId) : null;
+      const name = r.projectId === ''
+        ? 'Untagged'
+        : (p ? p.name : 'Project #' + r.projectId);
+      const nameCell = UI.el('td');
+      const nameLine = UI.el('div', { class: 'project-name-cell' });
+      if (p && p.color) {
+        nameLine.appendChild(UI.el('span', {
+          class: 'project-swatch tiny',
+          style: 'background:' + p.color
+        }));
+      }
+      nameLine.appendChild(UI.el('span', { text: name }));
+      if (p && p.archived) {
+        nameLine.appendChild(UI.el('span', { class: 'muted small', text: '(archived)' }));
+      }
+      nameCell.appendChild(nameLine);
+      if (r.tags.length) {
+        const tagsStrip = UI.el('div', { class: 'project-tags' });
+        for (const t of r.tags) {
+          tagsStrip.appendChild(UI.el('span', { class: 'tag-chip', text: '#' + t }));
+        }
+        nameCell.appendChild(tagsStrip);
+      }
+
+      const tr = UI.el('tr');
+      tr.appendChild(nameCell);
+      tr.appendChild(UI.el('td', { text: Calc.formatHours(r.hours, { compact: true }) }));
+      tr.appendChild(UI.el('td', { text: ((r.hours / total) * 100).toFixed(1) + '%' }));
+      tr.appendChild(UI.el('td', { text: String(r.segmentCount) }));
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+
+    const tfoot = UI.el('tfoot');
+    tfoot.appendChild(rowEl('td', [
+      'Total',
+      Calc.formatHours(total, { compact: true }),
+      '100%',
+      String(rows.reduce((n, r) => n + r.segmentCount, 0))
+    ]));
+    table.appendChild(tfoot);
+
+    wrap.appendChild(table);
+    return wrap;
   }
 
   function shiftMonth(delta) {
@@ -1000,6 +1456,11 @@
     form.elements['flexOpeningBalance'].value = s.flexOpeningBalance || 0;
     form.elements['flexOpeningDate'].value = s.flexOpeningDate || '';
 
+    populateProjectSelect(form.elements['defaultProjectId'], s.defaultProjectId || '', {
+      includeUntagged: true,
+      untaggedLabel: '— None (untagged) —'
+    });
+
     const workDays = Calc.workDaysArray(s);
     for (const box of form.querySelectorAll('[data-work-day]')) {
       const dow = parseInt(box.getAttribute('data-work-day'), 10);
@@ -1034,7 +1495,8 @@
         flexOpeningDate: f['flexOpeningDate'].value || '',
         officeStart: officeStart,
         officeEnd: officeEnd,
-        workDays: wd
+        workDays: wd,
+        defaultProjectId: f['defaultProjectId'].value || ''
       };
       persistSettings();
       UI.toast('Settings saved', 'success');
@@ -1049,6 +1511,13 @@
       Storage.exportCsv(App.state);
       UI.toast('CSV exported', 'success');
     });
+    const segCsvBtn = view.querySelector('[data-action="export-segments-csv"]');
+    if (segCsvBtn) {
+      segCsvBtn.addEventListener('click', () => {
+        Storage.exportSegmentsCsv(App.state);
+        UI.toast('Segments CSV exported', 'success');
+      });
+    }
 
     const importInput = view.querySelector('[data-import-file]');
     importInput.addEventListener('change', async () => {
@@ -1083,6 +1552,7 @@
       }
     });
 
+    setupProjectsUI(view);
     setupTokensUI(view);
 
     const pwdForm = view.querySelector('[data-password-form]');
@@ -1380,7 +1850,9 @@
   function setupLiveElapsedTicker() {
     // Tick any "elapsed since HH:MM" displays every second. This lets the
     // dashboard show a continuously-running counter while clocked in or
-    // on lunch, without a full re-render.
+    // on lunch, without a full re-render. Also nudges any rendered
+    // timelines so their open-segment bar + "now" marker track the
+    // wall clock without re-rendering the whole view.
     setInterval(() => {
       const nodes = document.querySelectorAll('[data-elapsed-ticker][data-elapsed-start]');
       const todayKey = Calc.toDateKey(new Date());
@@ -1388,6 +1860,11 @@
         const start = node.getAttribute('data-elapsed-start');
         const startDate = node.getAttribute('data-elapsed-start-date') || todayKey;
         if (start) node.textContent = formatElapsedSince(start, startDate, todayKey);
+      }
+      const now = new Date();
+      const timelines = document.querySelectorAll('svg.day-timeline');
+      for (const svg of timelines) {
+        if (typeof svg.refreshNow === 'function') svg.refreshNow(now);
       }
     }, 1000);
   }
