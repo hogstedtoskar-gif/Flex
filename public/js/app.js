@@ -237,7 +237,7 @@
     btnLunchStart.addEventListener('click', () => lunchStart(todayKey));
     btnLunchEnd.addEventListener('click', () => lunchEnd(todayKey));
 
-    const c = Calc.computeDay(day, settings);
+    const c = Calc.computeDay(dayForLiveTotals(day, status), settings);
     const todayTotals = view.querySelector('[data-today-totals]');
     todayTotals.appendChild(UI.stat('Worked', Calc.formatHours(c.workedHours)));
     todayTotals.appendChild(UI.stat('Regular', Calc.formatHours(c.regular)));
@@ -367,6 +367,23 @@
   function nowHM() {
     const d = new Date();
     return Calc.pad(d.getHours()) + ':' + Calc.pad(d.getMinutes());
+  }
+
+  function dayForLiveTotals(day, status) {
+    if (!day || !Array.isArray(day.entries)) return day;
+    if (!status || status.state !== 'working' || !status.openEntry || !status.openEntry.id) {
+      return day;
+    }
+    const now = nowHM();
+    return {
+      ...day,
+      entries: day.entries.map((e) => {
+        if (e.id === status.openEntry.id && e.type === 'work' && e.start && !e.end) {
+          return { ...e, end: now };
+        }
+        return e;
+      })
+    };
   }
 
   function clockIn(dateKey) {
@@ -1258,6 +1275,15 @@
     setInterval(tick, 1000);
   }
 
+  function setupLiveDashboardRefresh() {
+    // Keep the dashboard totals moving while a work segment is open.
+    setInterval(() => {
+      if (!App.user || !App.ready) return;
+      if (App.currentView !== 'dashboard') return;
+      render();
+    }, 30000);
+  }
+
   function setupBeforeUnloadFlush() {
     // Best-effort: flush any pending writes when the user closes the tab.
     window.addEventListener('beforeunload', () => {
@@ -1291,6 +1317,7 @@
     setupTabs();
     setupHotkeys();
     setupLiveClock();
+    setupLiveDashboardRefresh();
     setupBeforeUnloadFlush();
     setupLogout();
     registerServiceWorker();
