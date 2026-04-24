@@ -203,7 +203,46 @@ Tokens can only drive the `/api/quick/*` endpoints. They cannot log in to the we
 read historical data, change the password, or create more tokens. Revoke any token
 from the same Settings page.
 
-### iOS — Shortcuts + home-screen widget
+### iOS — interactive widget (Scriptable, recommended)
+
+The `ios/TimeTrackerWidget.js` file in this repo is a drop-in [Scriptable](https://scriptable.app)
+widget that shows live status **and** clock-in / clock-out / lunch / refresh tiles in a single
+home-screen tile — no Shortcuts juggling required.
+
+1. Install the free <b>Scriptable</b> app on your iPhone.
+2. In the web UI go to <b>Settings → Phone widget</b> and create an API token. Copy the
+   `ttk_…` value immediately.
+3. Open Scriptable → <b>+</b> to create a new script, name it <b>TimeTracker</b>, and paste
+   the contents of <a href="./ios/TimeTrackerWidget.js"><code>ios/TimeTrackerWidget.js</code></a>.
+4. Tap <b>▶︎</b> once to run it. You'll be prompted for:
+   - <b>Server URL</b> — e.g. `http://192.168.1.10:8787` or `https://tt.your-domain`.
+   - <b>Token</b> — the `ttk_…` value from step 2.
+   Both are stored in the iOS Keychain.
+5. Long-press the home screen → <b>Edit Home Screen</b> → <b>+</b> → <b>Scriptable</b> →
+   pick the <b>Medium</b> size → <b>Add Widget</b>.
+6. Long-press the new widget → <b>Edit Widget</b> → set <b>Script</b> to <i>TimeTracker</i>
+   and <b>When Interacting</b> to <b>Run Script</b>. Done.
+
+Layout by widget size:
+
+| Size    | What you get |
+|---------|--------------|
+| Small   | Status only + one smart tap target: tap to clock in when off, to clock out when working, to end lunch when on lunch (iOS limits small widgets to one tap region). |
+| Medium  | Status + elapsed + active project on the left, four tiles on the right (<b>In</b>, <b>Lunch</b>, <b>Out</b>, <b>↻</b>), plus a small <b>⚙︎ Configure</b> link. Recommended. |
+| Large   | Status + today's totals + four big action tiles. Best if you already have extra space. |
+
+Status colours: green = clocked in, amber = on lunch, grey = off, red = offline (no network
+or token rejected — tap <b>⚙︎ Configure</b> to re-enter the URL or rotate the token).
+
+To change the server URL or rotate the token later, open the script in Scriptable and run
+it again (or tap <b>⚙︎ Configure</b> in the medium widget) — the same alert comes up with
+the stored values pre-filled.
+
+Because the widget uses the same `/api/quick/*` endpoints as every other integration here,
+it respects the per-user default project: if you set one in Settings, tapping <b>In</b>
+starts the new segment already tagged with that project.
+
+### iOS — Shortcuts + home-screen widget (alternative)
 
 1. Open the built-in <b>Shortcuts</b> app → <b>+</b> (new shortcut).
 2. Add the action <b>Get contents of URL</b>.
@@ -298,9 +337,14 @@ Response body is a status snapshot:
   "date": "2026-04-22",
   "state": "working",
   "since": "08:03",
+  "project": { "id": 3, "name": "Alpha", "color": "#ff8800" },
+  "tags": ["deep-work"],
   "today": { "workedHours": 0, "lunchHours": 0 }
 }
 ```
+
+`project` and `tags` are `null` when the open segment is not tagged (or there is no open
+segment).
 
 Each token is rate-limited to 30 requests / 60 s to protect the server from a runaway
 widget. Revoking a token is immediate.
@@ -316,6 +360,7 @@ widget. Revoking a token is immediate.
 - Weekly and monthly summaries with inline bar charts.
 - **Projects & tags** – attach an optional project (with custom color) and free-form tags to every work segment. Pick a default project or pick one per clock-in from the dashboard; the weekly/monthly summary breaks totals down by project.
 - **Visual day timeline** – an SVG strip on the dashboard and in the Diary shows the day's segments at a glance, shaded with each project's color. The current work segment grows live as time passes.
+- **Interactive iOS widget** – a drop-in [Scriptable](https://scriptable.app) script in `ios/TimeTrackerWidget.js` renders a home-screen tile with live status plus Clock-in / Clock-out / Lunch / Refresh buttons.
 - JSON backup/restore, a daily CSV export, and a per-segment CSV export (project + tags columns).
 - Overlap and validation errors are highlighted in the Diary view.
 - Alerts for past days with an unfinished clock-out.

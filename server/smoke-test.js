@@ -390,8 +390,14 @@ async function main() {
     '/api/quick/clock-in?tz=UTC&time=09:00&project=' + projBetaId + '&tags=focus,proj',
     undefined, headersProj);
   assert(r.status === 200 && r.data.state === 'working', 'quick clock-in with project -> working');
+  assert(r.data.project && r.data.project.id === projBetaId,
+    'status snapshot includes active project');
+  assert(Array.isArray(r.data.tags) && r.data.tags.includes('focus'),
+    'status snapshot includes active tags');
   r = await req('POST', '/api/quick/clock-out?tz=UTC&time=10:30', undefined, headersProj);
   assert(r.status === 200 && r.data.state === 'off', 'quick clock-out -> off');
+  assert(r.data.project === null && r.data.tags === null,
+    'project + tags null after clock-out');
 
   r = await req('GET', '/api/state');
   const pdKeys = Object.keys(r.data.days);

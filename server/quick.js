@@ -141,13 +141,22 @@ function totalsForDay(entries) {
   };
 }
 
-function snapshot(dateKey, day) {
+function snapshot(dateKey, day, projects) {
   const entries = (day && day.entries) || [];
   const status = currentStatus(entries);
+  const open = entries.find((e) => e && e.start && !e.end) || null;
+  let project = null;
+  if (open && open.projectId != null && Array.isArray(projects)) {
+    const p = projects.find((pp) => Number(pp.id) === Number(open.projectId));
+    if (p) project = { id: p.id, name: p.name, color: p.color || null };
+  }
+  const tags = (open && Array.isArray(open.tags) && open.tags.length) ? open.tags.slice() : null;
   return {
     date: dateKey,
     state: status.state,
     since: status.since || null,
+    project,
+    tags,
     today: totalsForDay(entries)
   };
 }
@@ -188,7 +197,7 @@ function clockIn(store, userId, input) {
   if (!result.ok) throw conflict(result.error);
   day.entries = result.entries;
   store.setDay(userId, dateKey, day);
-  return snapshot(dateKey, day);
+  return snapshot(dateKey, day, state.projects);
 }
 
 function clockOut(store, userId, input) {
@@ -208,7 +217,7 @@ function clockOut(store, userId, input) {
   if (!result.ok) throw conflict(result.error);
   day.entries = result.entries;
   store.setDay(userId, key, day);
-  return snapshot(key, day);
+  return snapshot(key, day, state.projects);
 }
 
 function lunchToggle(store, userId, input) {
@@ -232,7 +241,7 @@ function lunchToggle(store, userId, input) {
   if (!result.ok) throw conflict(result.error);
   day.entries = result.entries;
   store.setDay(userId, key, day);
-  return snapshot(key, day);
+  return snapshot(key, day, state.projects);
 }
 
 function statusOf(store, userId, input) {
@@ -244,7 +253,7 @@ function statusOf(store, userId, input) {
     const hit = findOpenDay(state);
     if (hit) { day = hit.day; key = hit.key; }
   }
-  return snapshot(key, day || { entries: [], note: '' });
+  return snapshot(key, day || { entries: [], note: '' }, state.projects);
 }
 
 module.exports = {
