@@ -217,10 +217,16 @@
       statusText = 'Last clock-out ' + (status.lastEntry.end || '?');
     }
     statusEl.appendChild(UI.el('span', { text: statusText }));
-    statusEl.appendChild(UI.el('span', {
-      class: 'muted',
-      text: status.state === 'off' ? '—' : 'Now: ' + nowHM()
-    }));
+    if ((status.state === 'working' || status.state === 'lunch') && status.openEntry && status.openEntry.start) {
+      statusEl.appendChild(UI.el('span', {
+        class: 'muted',
+        'data-elapsed-ticker': '',
+        'data-elapsed-start': status.openEntry.start,
+        text: formatElapsedSince(status.openEntry.start)
+      }));
+    } else {
+      statusEl.appendChild(UI.el('span', { class: 'muted', text: '—' }));
+    }
 
     const btnIn = view.querySelector('[data-action="clock-in"]');
     const btnOut = view.querySelector('[data-action="clock-out"]');
@@ -367,6 +373,20 @@
   function nowHM() {
     const d = new Date();
     return Calc.pad(d.getHours()) + ':' + Calc.pad(d.getMinutes());
+  }
+
+  function formatElapsedSince(startHM) {
+    const start = Calc.parseHM(startHM);
+    if (start == null) return '';
+    const d = new Date();
+    const nowMin = d.getHours() * 60 + d.getMinutes();
+    const nowSec = d.getSeconds();
+    let totalSec = (nowMin - start) * 60 + nowSec;
+    if (totalSec < 0) totalSec += 24 * 60 * 60;
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    return h + 'h ' + Calc.pad(m) + 'm ' + Calc.pad(s) + 's';
   }
 
   function dayForLiveTotals(day, status) {
@@ -1284,6 +1304,19 @@
     }, 30000);
   }
 
+  function setupLiveElapsedTicker() {
+    // Tick any "elapsed since HH:MM" displays every second. This lets the
+    // dashboard show a continuously-running counter while clocked in or
+    // on lunch, without a full re-render.
+    setInterval(() => {
+      const nodes = document.querySelectorAll('[data-elapsed-ticker][data-elapsed-start]');
+      for (const node of nodes) {
+        const start = node.getAttribute('data-elapsed-start');
+        if (start) node.textContent = formatElapsedSince(start);
+      }
+    }, 1000);
+  }
+
   function setupBeforeUnloadFlush() {
     // Best-effort: flush any pending writes when the user closes the tab.
     window.addEventListener('beforeunload', () => {
@@ -1318,6 +1351,7 @@
     setupHotkeys();
     setupLiveClock();
     setupLiveDashboardRefresh();
+    setupLiveElapsedTicker();
     setupBeforeUnloadFlush();
     setupLogout();
     registerServiceWorker();
