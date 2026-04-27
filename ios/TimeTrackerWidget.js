@@ -27,6 +27,13 @@
 //      the new widget → Edit Widget → Script = TimeTracker, When
 //      Interacting = Run Script.
 //
+// iOS limitation: tapping any tile must open Scriptable briefly — the
+// system cannot run this JavaScript inside the widget itself. After
+// each action we call App.close() when available so you hop back to
+// the home screen quickly (you may still see a short transition). To
+// avoid opening Scriptable at all, use Shortcuts widgets instead (see
+// README).
+//
 // Re-run the script with the "Configure" quick-action (or tap the
 // small cog in the widget) to change the server URL or rotate the
 // token.
@@ -151,6 +158,21 @@ async function notify(title, body) {
   n.title = title;
   n.body = body;
   await n.schedule();
+}
+
+/**
+ * After a widget tap, Scriptable has to come to the foreground. When
+ * the runtime exposes App.close(), use it so iOS returns you to the
+ * home screen right away (still a brief flash — unavoidable).
+ */
+function collapseHostApp() {
+  try {
+    if (typeof App !== "undefined" && typeof App.close === "function") {
+      App.close();
+    }
+  } catch (_) {
+    /* App.close is undocumented / may be absent on some versions */
+  }
 }
 
 // -------- widget layout --------
@@ -414,22 +436,33 @@ async function main() {
   if (action === "configure") {
     await promptConfig();
     Script.complete();
+    collapseHostApp();
     return;
   }
   if (action === "smart") {
     const r = await fetchStatus();
     await smartAction(r.ok ? r.status : null);
     Script.complete();
+    collapseHostApp();
     return;
   }
   if (action && ACTIONS[action]) {
     await doAction(action);
     Script.complete();
+    collapseHostApp();
     return;
   }
-  if (action === "refresh" || !action) {
-    // Preview inside Scriptable: show all three widget sizes so the
-    // user can pick the best layout for their home screen.
+  if (action === "refresh") {
+    // Widget "↻" — rebuild snapshot and dismiss; do not presentMedium()
+    // (that would trap you inside Scriptable).
+    const w = await buildWidget();
+    Script.setWidget(w);
+    Script.complete();
+    collapseHostApp();
+    return;
+  }
+  if (!action) {
+    // ▶︎ inside Scriptable with no ?action= — preview layout only.
     const w = await buildWidget();
     await w.presentMedium();
     Script.complete();

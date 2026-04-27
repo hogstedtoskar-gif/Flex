@@ -238,6 +238,20 @@ To change the server URL or rotate the token later, open the script in Scriptabl
 it again (or tap <b>⚙︎ Configure</b> in the medium widget) — the same alert comes up with
 the stored values pre-filled.
 
+**Why Scriptable jumps to the foreground when you tap a button**
+
+Apple only renders the widget UI in the background; any JavaScript (network calls, parsing)
+must run inside the Scriptable app. There is no supported way to keep Scriptable hidden for
+that step. The widget script calls `App.close()` at the end of each action when iOS exposes
+that API, so you are sent back to the home screen as soon as the request finishes — you may
+still see a quick transition. The **↻** tile only refreshes the widget snapshot (it no longer
+opens a full-screen preview inside Scriptable).
+
+If you want to avoid opening Scriptable entirely, use **Shortcuts** home-screen widgets
+instead (see the next section): each shortcut is a separate tile, but Shortcuts often stays
+more in the background than a full app switch. Another option is **Back Tap** or the **Action
+Button** running a shortcut that POSTs to `/api/quick/*` with *Show When Run* turned off.
+
 Because the widget uses the same `/api/quick/*` endpoints as every other integration here,
 it respects the per-user default project: if you set one in Settings, tapping <b>In</b>
 starts the new segment already tagged with that project.
