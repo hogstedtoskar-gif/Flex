@@ -536,7 +536,7 @@
       weekProgress.appendChild(UI.progressBar(
         'Weekly overtime filled',
         week.overtimeFilled,
-        settings.weeklyOvertimeTargetHours
+        week.target
       ));
     } else {
       weekProgress.appendChild(UI.el('div', {
@@ -1253,7 +1253,7 @@
         w.regularTotal,
         w.overtimeFilled,
         w.flexGain,
-        settings.regularHoursPerDay * Calc.countWorkDays(settings) + settings.weeklyOvertimeTargetHours
+        settings.regularHoursPerDay * Calc.countWorkDays(settings) + w.target
       ));
     }
     monthChart.appendChild(UI.chartLegend());
@@ -1456,6 +1456,69 @@
     form.elements['flexOpeningBalance'].value = s.flexOpeningBalance || 0;
     form.elements['flexOpeningDate'].value = s.flexOpeningDate || '';
 
+    const weekTargetsList = view.querySelector('[data-weekly-targets-list]');
+    const initialOverrides = Array.isArray(s.weeklyOvertimeTargetsByWeek)
+      ? s.weeklyOvertimeTargetsByWeek.slice()
+      : [];
+
+    function readWeekTargetDrafts() {
+      if (!weekTargetsList) return [];
+      const rows = weekTargetsList.querySelectorAll('[data-week-target-index]');
+      const out = [];
+      for (const input of rows) {
+        const idx = parseInt(input.getAttribute('data-week-target-index'), 10);
+        if (!Number.isFinite(idx) || idx < 0) continue;
+        out[idx] = input.value;
+      }
+      return out;
+    }
+
+    function renderWeekTargetRows(seedValues) {
+      if (!weekTargetsList) return;
+      UI.clear(weekTargetsList);
+      const weeks = Math.max(0, parseInt(form.elements['overtimePeriodWeeks'].value, 10) || 0);
+      if (!weeks) {
+        weekTargetsList.appendChild(UI.el('div', {
+          class: 'muted small',
+          text: 'Set overtime period length above to configure per-week targets.'
+        }));
+        return;
+      }
+      const startRaw = form.elements['overtimePeriodStart'].value;
+      const hasStart = /^\d{4}-\d{2}-\d{2}$/.test(startRaw);
+      const weekStartDay = parseInt(form.elements['weekStartDay'].value, 10) || 1;
+      let startWeek = null;
+      if (hasStart) {
+        startWeek = Calc.weekStart(Calc.parseDateKey(startRaw), weekStartDay);
+      }
+      for (let i = 0; i < weeks; i++) {
+        let label = 'Week ' + (i + 1);
+        if (startWeek) {
+          const d = Calc.addDays(startWeek, i * 7);
+          label += ' (' + UI.formatDateShort(d) + ')';
+        }
+        const val = seedValues && seedValues[i] != null ? String(seedValues[i]) : '';
+        weekTargetsList.appendChild(UI.el('label', {}, [
+          UI.el('span', { text: label }),
+          UI.el('input', {
+            type: 'number',
+            min: '0',
+            max: '168',
+            step: '0.25',
+            value: val,
+            'data-week-target-index': String(i)
+          })
+        ]));
+      }
+    }
+
+    renderWeekTargetRows(initialOverrides);
+    for (const name of ['overtimePeriodWeeks', 'overtimePeriodStart', 'weekStartDay']) {
+      form.elements[name].addEventListener('change', () => {
+        renderWeekTargetRows(readWeekTargetDrafts());
+      });
+    }
+
     populateProjectSelect(form.elements['defaultProjectId'], s.defaultProjectId || '', {
       includeUntagged: true,
       untaggedLabel: '— None (untagged) —'
@@ -1486,6 +1549,22 @@
         weekStartDay: parseInt(f['weekStartDay'].value, 10),
         regularHoursPerDay: parseFloat(f['regularHoursPerDay'].value) || 0,
         weeklyOvertimeTargetHours: parseFloat(f['weeklyOvertimeTargetHours'].value) || 0,
+        weeklyOvertimeTargetsByWeek: (() => {
+          const out = [];
+          const weeks = parseInt(f['overtimePeriodWeeks'].value, 10) || 0;
+          const drafts = readWeekTargetDrafts();
+          for (let i = 0; i < weeks; i++) {
+            const raw = drafts[i];
+            if (raw == null || raw === '') {
+              out[i] = null;
+              continue;
+            }
+            const n = parseFloat(raw);
+            out[i] = Number.isFinite(n) ? Math.max(0, n) : null;
+          }
+          while (out.length && out[out.length - 1] == null) out.pop();
+          return out;
+        })(),
         overtimePeriodStart: f['overtimePeriodStart'].value,
         overtimePeriodWeeks: parseInt(f['overtimePeriodWeeks'].value, 10) || 0,
         defaultLunchMinutes: parseInt(f['defaultLunchMinutes'].value, 10) || 0,

@@ -336,6 +336,13 @@
             <span>Weekly overtime target (hours)</span>
             <input type="number" name="weeklyOvertimeTargetHours" min="0" max="168" step="0.25" />
           </label>
+          <fieldset>
+            <legend>Per-week overtime targets <em class="muted small">(optional overrides)</em></legend>
+            <div class="muted small">
+              Leave a week blank to use the default weekly overtime target.
+            </div>
+            <div data-weekly-targets-list></div>
+          </fieldset>
           <label>
             <span>Overtime period start</span>
             <input type="date" name="overtimePeriodStart" />

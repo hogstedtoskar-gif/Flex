@@ -49,6 +49,7 @@ const DEFAULT_SETTINGS = {
   weekStartDay: 1,
   regularHoursPerDay: 8,
   weeklyOvertimeTargetHours: 6,
+  weeklyOvertimeTargetsByWeek: [],
   overtimePeriodStart: todayKey(),
   overtimePeriodWeeks: 4,
   defaultLunchMinutes: 30,

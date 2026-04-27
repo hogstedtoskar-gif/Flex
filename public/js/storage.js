@@ -17,6 +17,7 @@ const Storage = (() => {
     weekStartDay: 1,
     regularHoursPerDay: 8,
     weeklyOvertimeTargetHours: 6,
+    weeklyOvertimeTargetsByWeek: [],
     overtimePeriodStart: Calc.toDateKey(new Date()),
     overtimePeriodWeeks: 4,
     defaultLunchMinutes: 30,

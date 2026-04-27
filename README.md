@@ -408,7 +408,8 @@ Configurable in the Settings view:
 | Regular hours per day | Threshold above which hours become "extra" |
 | Work days | Which weekdays are working days (default Mon–Fri). Worked time on unchecked days can only fill the weekly overtime target — never becomes regular or flex, and never creates shortfall. The weekly "Regular hours" progress bar target is `regularHoursPerDay × (number of checked days)`. |
 | Office hours start / end | Work outside this window can only become overtime — never regular or flex. Leave blank to disable. |
-| Weekly overtime target | How many extra hours per week count as ordered overtime before overflowing to flex |
+| Weekly overtime target | Default extra hours per week that count as ordered overtime before overflowing to flex |
+| Per-week overtime targets | Optional week-by-week overrides within the overtime period (leave a week blank to use the default weekly target) |
 | Overtime period start | First day of the ordered-overtime period |
 | Overtime period length | Number of weeks the overtime order applies |
 | Default lunch | Informational default (currently used as a reference only) |

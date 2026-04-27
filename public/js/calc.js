@@ -352,6 +352,19 @@ const Calc = (() => {
     return idx;
   }
 
+  function weekTargetHours(date, settings) {
+    const base = Math.max(0, Number(settings && settings.weeklyOvertimeTargetHours) || 0);
+    const idx = periodWeekIndex(date, settings);
+    if (idx < 0) return base;
+    const list = settings && Array.isArray(settings.weeklyOvertimeTargetsByWeek)
+      ? settings.weeklyOvertimeTargetsByWeek
+      : [];
+    const raw = list[idx];
+    if (raw == null || raw === '') return base;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? Math.max(0, parsed) : base;
+  }
+
   /**
    * Compute a full week's allocation. Walks days in order.
    *
@@ -366,7 +379,7 @@ const Calc = (() => {
    */
   function computeWeek(weekStartDate, daysMap, settings) {
     const inPeriod = periodWeekIndex(weekStartDate, settings) !== -1;
-    const target = settings.weeklyOvertimeTargetHours;
+    const target = weekTargetHours(weekStartDate, settings);
 
     const days = [];
     let overtimeFilled = 0;
@@ -500,7 +513,7 @@ const Calc = (() => {
    */
   function computeOvertimePeriod(daysMap, settings) {
     const result = {
-      totalRequired: settings.weeklyOvertimeTargetHours * settings.overtimePeriodWeeks,
+      totalRequired: 0,
       totalFilled: 0,
       weeks: []
     };
@@ -513,8 +526,9 @@ const Calc = (() => {
         index: i,
         weekStart: new Date(cursor),
         filled: w.overtimeFilled,
-        target: settings.weeklyOvertimeTargetHours
+        target: w.target
       });
+      result.totalRequired += w.target;
       result.totalFilled += w.overtimeFilled;
       cursor = addDays(cursor, 7);
     }
@@ -706,6 +720,7 @@ const Calc = (() => {
     addDays,
     sameDay,
     periodWeekIndex,
+    weekTargetHours,
     computeWeek,
     computeFlexBalance,
     computeOvertimePeriod,
