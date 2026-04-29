@@ -112,7 +112,7 @@ const Calc = (() => {
    * Validate entries for a single day.
    * Returns { errors: [{ id, message }], warnings: [{ id?, message }] }.
    */
-  function validateDay(entries) {
+  function validateDay(entries, day) {
     const errors = [];
     const warnings = [];
     if (!entries || !entries.length) return { errors, warnings };
@@ -173,6 +173,19 @@ const Calc = (() => {
       }
     }
 
+    if (day && day.pto) {
+      let workMins = 0;
+      for (const e of entries) {
+        if (e.type !== 'work' || !e.start || !e.end) continue;
+        workMins += entryMinutes(e);
+      }
+      if (workMins > 0) {
+        warnings.push({
+          message: 'PTO day with recorded work — shortfall is waived; totals follow your segments.'
+        });
+      }
+    }
+
     return { errors, warnings };
   }
 
@@ -200,13 +213,30 @@ const Calc = (() => {
     const entries = (day && day.entries) || [];
     const window = officeWindow(settings);
     const workDay = isWorkDay(date, settings);
+    const isPtoDay = !!(day && day.pto);
     // Days with zero recorded entries are treated as "not tracked", not
     // as "you owe the full daily target". This keeps weekends, holidays,
     // vacation, sick days, and future days from dragging the weekly
     // flexNet and the all-time flex balance into a big negative.
     // Days that ARE recorded but fall short of the target still count
     // (shortfall is real in that case).
+    // PTO on a scheduled work day with no segments counts as a full paid
+    // day off for regular-hour reporting (regular = daily target) and
+    // never creates shortfall.
     if (entries.length === 0) {
+      if (isPtoDay && workDay) {
+        const daily = settings.regularHoursPerDay;
+        return {
+          workedHours: 0, workedHoursRaw: 0,
+          inOfficeHours: 0, outsideHours: 0,
+          lunchHours: 0, lunchDeduction: 0,
+          regular: daily, extra: 0, extraInOffice: 0, extraOutside: 0,
+          shortfall: 0, hasOpen: false,
+          officeEnforced: !!window,
+          isWorkDay: workDay,
+          isPto: true
+        };
+      }
       return {
         workedHours: 0, workedHoursRaw: 0,
         inOfficeHours: 0, outsideHours: 0,
@@ -214,7 +244,8 @@ const Calc = (() => {
         regular: 0, extra: 0, extraInOffice: 0, extraOutside: 0,
         shortfall: 0, hasOpen: false,
         officeEnforced: !!window,
-        isWorkDay: workDay
+        isWorkDay: workDay,
+        isPto: isPtoDay
       };
     }
     let workedMin = 0;
@@ -288,6 +319,8 @@ const Calc = (() => {
       reportedOutside = workedHours;
     }
     const extra = extraInOffice + extraOutside;
+    let outShortfall = shortfall;
+    if (isPtoDay && workDay) outShortfall = 0;
     return {
       workedHours,
       workedHoursRaw,
@@ -299,10 +332,11 @@ const Calc = (() => {
       extra,
       extraInOffice,
       extraOutside,
-      shortfall,
+      shortfall: outShortfall,
       hasOpen,
       officeEnforced: !!window,
-      isWorkDay: workDay
+      isWorkDay: workDay,
+      isPto: isPtoDay
     };
   }
 

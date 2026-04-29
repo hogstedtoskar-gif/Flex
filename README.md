@@ -156,7 +156,7 @@ All `/api/*` endpoints except the ones marked *public* require the `tt_session` 
 | `GET` | `/api/state` | — | full `{ version, settings, days }` |
 | `PUT` | `/api/state` | full state | replaces everything (used by Import JSON) |
 | `PUT` | `/api/settings` | settings object | merged + persisted settings |
-| `PUT` | `/api/days/:date` | `{ entries, note }` | the saved day, or 204 if it became empty |
+| `PUT` | `/api/days/:date` | `{ entries, note, pto? }` | the saved day, or 204 if it became empty (a PTO-only day uses `entries: []`, empty `note`, and `pto: true`) |
 | `DELETE` | `/api/days/:date` | — | 204 |
 | `POST` | `/api/reset` | — | empty default state |
 | `GET` | `/api/auth/tokens` | — | list of phone-widget tokens (no plaintext) |
@@ -367,6 +367,7 @@ widget. Revoking a token is immediate.
 
 - Clock in/out and lunch start/end buttons with a state machine that prevents invalid actions.
 - Manual entry and editing of every segment in the Diary view.
+- **PTO (paid time off)** – mark a day in the Diary so it never creates shortfall; a full PTO day with no work segments credits regular hours at your daily target for reporting.
 - Per-day calculation of worked, regular, extra, lunch, and shortfall hours.
 - Weekly allocation: overtime is filled up to the configured weekly target; the rest flows into flex.
 - Overtime period tracking with per-week progress bars and total filled vs required.
@@ -397,6 +398,7 @@ widget. Revoking a token is immediate.
    - Outside the overtime period, all `extraInOffice` becomes flex gain and all `extraOutside` is discarded.
    - `flex net = flex gain - shortfall`.
 3. The all-time **flex balance** is the configured opening balance plus `flex gain − shortfall` summed over every *recorded* day (days with no entries never contribute, so weekends and future days don't sink the balance). If **Opening flex applies from** is set, only days on or after that date contribute.
+4. **PTO** (Diary → “This day is PTO”): on a **work day**, shortfall is always zero (even if you worked less than the daily target or not at all). With **no work segments**, regular hours are set to your daily target so weekly regular totals treat the day as fully paid off. Overtime and flex still follow your clocked segments when you do record work on a PTO day.
 
 ## Settings
 
@@ -418,6 +420,8 @@ Configurable in the Settings view:
 | Opening flex balance | Your flex balance at the start of "applies from" (e.g. imported from a previous tool) |
 | Opening flex applies from | Flex earned on this date and later is summed on top of the opening balance. Days before this date do not contribute (they're assumed to be rolled up in the opening value). Leave blank to sum every recorded day. |
 | Default project | Pre-selects this project for new clock-ins (UI and quick-action widgets). Set to `— None —` to always start untagged. |
+
+**PTO** is toggled per calendar day in the **Diary** view (not in Settings). It is stored on that day’s record and appears in CSV export and the weekly summary table.
 
 Project management lives in the same Settings view: create projects with a display color, rename or recolor them inline, archive when they're no longer in use (archived projects still show in historical reports but disappear from the clock-in picker), and delete projects once they have no entries referencing them.
 
@@ -445,7 +449,13 @@ For automated backups, just snapshot the SQLite file (e.g. nightly `cp /var/lib/
         { "id": "uuid", "type": "lunch", "start": "12:00", "end": "12:30" },
         { "id": "uuid", "type": "work",  "start": "12:30", "end": "17:30" }
       ],
-      "note": "optional"
+      "note": "optional",
+      "pto": false
+    },
+    "2026-04-18": {
+      "entries": [],
+      "pto": true,
+      "note": ""
     }
   }
 }

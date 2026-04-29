@@ -7,7 +7,7 @@
  *   users          (id, username UNIQUE, password_hash, created_at)
  *   sessions       (token PRIMARY KEY, user_id, created_at, last_seen)
  *   user_settings  (user_id PRIMARY KEY, value JSON)
- *   days           (user_id, date, note, entries JSON, updated_at)
+ *   days           (user_id, date, note, entries JSON, pto, updated_at)
  *                  PRIMARY KEY (user_id, date)
  *   api_tokens     (id, user_id, token_hash, label, created_at, last_used_at)
  *                  Long-lived bearer tokens for the phone-widget endpoints.
@@ -97,6 +97,14 @@ function tableExists(db, name) {
   return !!row;
 }
 
+/** Add `pto` flag to `days` for paid-time-off (older DBs predate this column). */
+function ensureDaysPtoColumn(db) {
+  if (!tableExists(db, 'days')) return;
+  const cols = columnSet(db, 'days');
+  if (cols.has('pto')) return;
+  db.exec('ALTER TABLE days ADD COLUMN pto INTEGER NOT NULL DEFAULT 0');
+}
+
 function open(dbPath) {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
@@ -105,6 +113,7 @@ function open(dbPath) {
 
   ensureSchema(db);
   migrateLegacyIfNeeded(db);
+  ensureDaysPtoColumn(db);
 
   const stmts = prepareStatements(db);
 
@@ -207,7 +216,9 @@ function open(dbPath) {
     for (const row of stmts.allDaysForUser.all(userId)) {
       let entries = [];
       try { entries = JSON.parse(row.entries); } catch (_) { entries = []; }
-      days[row.date] = { entries, note: row.note || '' };
+      const dayObj = { entries, note: row.note || '' };
+      if (row.pto) dayObj.pto = true;
+      days[row.date] = dayObj;
     }
     const projects = listProjects(userId);
     return { version: 1, settings, days, projects };
@@ -238,12 +249,15 @@ function open(dbPath) {
     const rawEntries = Array.isArray(day.entries) ? day.entries : [];
     const entries = sanitizeEntries(userId, rawEntries);
     const note = typeof day.note === 'string' ? day.note : '';
-    if (!entries.length && !note) {
+    const pto = !!(day.pto);
+    if (!entries.length && !note && !pto) {
       stmts.deleteDay.run(userId, dateKey);
       return null;
     }
-    stmts.upsertDay.run(userId, dateKey, note, JSON.stringify(entries));
-    return { entries, note };
+    stmts.upsertDay.run(userId, dateKey, note, JSON.stringify(entries), pto ? 1 : 0);
+    const out = { entries, note };
+    if (pto) out.pto = true;
+    return out;
   }
 
   // Strip unknown fields, coerce types, and validate projectId / tags.
@@ -349,8 +363,9 @@ function open(dbPath) {
         });
         const entries = sanitizeEntries(userId, remapped);
         const note = typeof day.note === 'string' ? day.note : '';
-        if (!entries.length && !note) continue;
-        stmts.upsertDay.run(userId, date, note, JSON.stringify(entries));
+        const pto = !!(day.pto);
+        if (!entries.length && !note && !pto) continue;
+        stmts.upsertDay.run(userId, date, note, JSON.stringify(entries), pto ? 1 : 0);
       }
       return getState(userId);
     });
@@ -733,14 +748,15 @@ function prepareStatements(db) {
 
     // days
     allDaysForUser: db.prepare(
-      'SELECT date, note, entries FROM days WHERE user_id = ? ORDER BY date'
+      'SELECT date, note, entries, pto FROM days WHERE user_id = ? ORDER BY date'
     ),
     upsertDay: db.prepare(
-      `INSERT INTO days (user_id, date, note, entries, updated_at)
-       VALUES (?, ?, ?, ?, datetime('now'))
+      `INSERT INTO days (user_id, date, note, entries, pto, updated_at)
+       VALUES (?, ?, ?, ?, ?, datetime('now'))
        ON CONFLICT(user_id, date) DO UPDATE SET
          note = excluded.note,
          entries = excluded.entries,
+         pto = excluded.pto,
          updated_at = excluded.updated_at`
     ),
     deleteDay: db.prepare(

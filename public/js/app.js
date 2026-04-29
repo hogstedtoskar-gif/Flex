@@ -47,7 +47,7 @@
   function pruneDay(key) {
     const d = App.state.days[key];
     if (!d) return;
-    if ((!d.entries || !d.entries.length) && !d.note) {
+    if ((!d.entries || !d.entries.length) && !d.note && !d.pto) {
       delete App.state.days[key];
     }
   }
@@ -493,6 +493,9 @@
     }
 
     const todayTotals = view.querySelector('[data-today-totals]');
+    if (c.isPto) {
+      todayTotals.appendChild(UI.stat('PTO', 'Yes', 'positive'));
+    }
     todayTotals.appendChild(UI.stat('Worked', Calc.formatHours(c.workedHours)));
     todayTotals.appendChild(UI.stat('Regular', Calc.formatHours(c.regular)));
     todayTotals.appendChild(UI.stat('Extra', Calc.formatHours(c.extra), c.extra > 0 ? 'overtime' : ''));
@@ -893,7 +896,7 @@
         day.entries = (day.entries || []).concat(newSegments);
       }
 
-      const { errors } = Calc.validateDay(day.entries);
+      const { errors } = Calc.validateDay(day.entries, day);
       if (errors.length) {
         errEl.textContent = 'Saved, but the day has issues: ' + errors.map(e => e.message).join('; ');
       }
@@ -952,6 +955,9 @@
     const c = Calc.computeDay(day, settings, diaryDate);
 
     const summaryEl = view.querySelector('[data-diary-summary]');
+    if (c.isPto) {
+      summaryEl.appendChild(UI.stat('PTO', 'Yes', 'positive'));
+    }
     summaryEl.appendChild(UI.stat('Worked', Calc.formatHours(c.workedHours)));
     summaryEl.appendChild(UI.stat('Regular', Calc.formatHours(c.regular)));
     summaryEl.appendChild(UI.stat('Extra', Calc.formatHours(c.extra), c.extra > 0 ? 'overtime' : ''));
@@ -981,7 +987,7 @@
       }));
     }
 
-    const validation = Calc.validateDay(day.entries || []);
+    const validation = Calc.validateDay(day.entries || [], day);
     const validationEl = view.querySelector('[data-diary-validation]');
     for (const err of validation.errors) {
       validationEl.appendChild(UI.el('div', {
@@ -1024,6 +1030,13 @@
           + ' work day.'
       }));
     }
+    if (c.isPto && Calc.isWorkDay(diaryDate, settings)) {
+      validationEl.appendChild(UI.el('div', {
+        class: 'alert alert-info',
+        text: 'PTO (paid time off): no shortfall on this day. With no work segments, '
+          + 'regular hours are credited at your daily target (' + Calc.formatHours(settings.regularHoursPerDay, { compact: true }) + ').'
+      }));
+    }
 
     const entriesEl = view.querySelector('[data-diary-entries]');
     const errorById = new Map();
@@ -1053,6 +1066,19 @@
       persistDay(key);
       render();
     });
+
+    const ptoEl = view.querySelector('[data-diary-pto]');
+    if (ptoEl) {
+      ptoEl.checked = !!day.pto;
+      ptoEl.addEventListener('change', () => {
+        const d = ensureDay(key);
+        if (ptoEl.checked) d.pto = true;
+        else delete d.pto;
+        pruneDay(key);
+        persistDay(key);
+        render();
+      });
+    }
 
     const noteEl = view.querySelector('[data-diary-note]');
     noteEl.value = day.note || '';
@@ -1358,7 +1384,7 @@
     const table = UI.el('table', { class: 'data-table' });
     const thead = UI.el('thead');
     thead.appendChild(rowEl('th', [
-      'Day', 'Date', 'Worked', 'Regular', 'Outside', 'Overtime', 'Flex gain', 'Shortfall'
+      'Day', 'Date', 'PTO', 'Worked', 'Regular', 'Outside', 'Overtime', 'Flex gain', 'Shortfall'
     ]));
     table.appendChild(thead);
 
@@ -1369,6 +1395,7 @@
       tbody.appendChild(rowEl('td', [
         weekdayNames[d.date.getDay()],
         d.dateKey,
+        d.day && d.day.pto ? 'Yes' : '—',
         Calc.formatHours(c.workedHours, { compact: true }),
         Calc.formatHours(c.regular, { compact: true }),
         c.outsideHours > 0 ? Calc.formatHours(c.outsideHours, { compact: true }) : '—',
@@ -1381,7 +1408,7 @@
 
     const tfoot = UI.el('tfoot');
     tfoot.appendChild(rowEl('td', [
-      'Total', '',
+      'Total', '', '',
       Calc.formatHours(week.workedTotal, { compact: true }),
       Calc.formatHours(week.regularTotal, { compact: true }),
       Calc.formatHours(week.outsideTotal || 0, { compact: true }),

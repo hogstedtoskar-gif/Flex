@@ -494,6 +494,23 @@ input.time24.invalid {
 
 .diary-add { margin-bottom: 14px; }
 
+.diary-pto {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.diary-pto span {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
 .note-block {
   display: flex;
   flex-direction: column;

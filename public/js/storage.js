@@ -360,7 +360,7 @@ const Storage = (() => {
 
     const keys = Object.keys(state.days).sort();
     const rows = [[
-      'Date', 'Weekday', 'Worked (h)', 'In Office (h)', 'Outside (h)',
+      'Date', 'Weekday', 'PTO', 'Worked (h)', 'In Office (h)', 'Outside (h)',
       'Regular (h)', 'Extra (h)',
       'Overtime (h)', 'Flex gain (h)', 'Outside unused (h)',
       'Shortfall (h)', 'Lunch (h)', 'Auto-lunch deduction (h)',
@@ -434,6 +434,7 @@ const Storage = (() => {
       rows.push([
         key,
         weekdayNames[date.getDay()],
+        day.pto ? 'yes' : 'no',
         c.workedHours.toFixed(2),
         c.inOfficeHours.toFixed(2),
         c.outsideHours.toFixed(2),

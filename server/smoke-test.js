@@ -199,6 +199,11 @@ async function main() {
   assert(stored.entries[1].type === 'lunch', 'lunch entry type preserved');
   assert(r.data.settings.flexOpeningBalance === 1.25, 'settings still applied');
 
+  r = await req('PUT', '/api/days/2026-04-16', { entries: [], note: '', pto: true });
+  assert(r.status === 200 && r.data.pto === true, 'PTO-only day saved');
+  r = await req('GET', '/api/state');
+  assert(r.data.days['2026-04-16'] && r.data.days['2026-04-16'].pto === true, 'PTO round-trips in state');
+
   console.log('\n[5] Empty day prunes');
   r = await req('PUT', '/api/days/2026-04-15', { entries: [], note: '' });
   assert(r.status === 204, 'empty PUT returns 204 (pruned)');
