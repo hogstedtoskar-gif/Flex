@@ -1,4 +1,4 @@
-/* lxc-update.js — run the host install/refresh script from the web UI (opt-in).
+/* lxc-update.js — run deploy/install.sh from the web UI (opt-in).
  *
  * Requires root privileges for the real deploy/install.sh. Typical LXC setup:
  *   timetracker ALL=(root) NOPASSWD: /bin/bash /opt/timetracker/deploy/install.sh
@@ -6,13 +6,13 @@
  * Env:
  *   ALLOW_WEB_LXC_UPDATE=1     — enable GET/POST /api/admin/lxc-update
  *   LXC_UPDATE_SCRIPT          — path to install.sh (default /opt/timetracker/deploy/install.sh)
- *   LXC_UPDATE_ALLOWED_USERS   — optional comma-separated usernames allowed to run (else any logged-in user)
+ *   LXC_UPDATE_ALLOWED_USERS   — optional comma-separated usernames allowed to run
  */
 
 const { spawn } = require('child_process');
 
 const DEFAULT_SCRIPT = '/opt/timetracker/deploy/install.sh';
-const MAX_OUTPUT_CHARS = 120_000;
+const MAX_OUTPUT_CHARS = 120000;
 const KILL_AFTER_MS = 15 * 60 * 1000;
 
 function webUpdateEnabled() {
@@ -41,7 +41,7 @@ function canUserRun(username) {
 
 /**
  * Runs: sudo -n bash <scriptPath>
- * @returns {Promise<{ code: number, stdout: string, stderr: string }>}
+ * Returns: { code, stdout, stderr }.
  */
 function runInstallScript() {
   const script = scriptPath();
@@ -56,15 +56,13 @@ function runInstallScript() {
       const s = typeof chunk === 'string' ? chunk : chunk.toString();
       const next = acc + s;
       return next.length > MAX_OUTPUT_CHARS
-        ? next.slice(0, MAX_OUTPUT_CHARS) + '\n… [truncated]'
+        ? next.slice(0, MAX_OUTPUT_CHARS) + '\n... [truncated]'
         : next;
     };
     child.stdout.on('data', (d) => { stdout = cap(d, stdout); });
     child.stderr.on('data', (d) => { stderr = cap(d, stderr); });
     const timer = setTimeout(() => {
-      try {
-        child.kill('SIGTERM');
-      } catch (_) { /* ignore */ }
+      try { child.kill('SIGTERM'); } catch (_) { /* ignore */ }
     }, KILL_AFTER_MS);
     child.on('error', (err) => {
       clearTimeout(timer);
@@ -84,6 +82,7 @@ function runInstallScript() {
 module.exports = {
   webUpdateEnabled,
   scriptPath,
+  allowedUsernames,
   canUserRun,
   runInstallScript
 };

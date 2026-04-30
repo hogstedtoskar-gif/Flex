@@ -56,6 +56,12 @@ On a production LXC, `deploy/install.sh` must run as **root**. The UI can trigge
 
 Then **Settings → Server update → Run install / update script** appears. The HTTP request may time out in front of a reverse proxy while the script runs; check `journalctl -u timetracker` on the host. **Do not enable this on untrusted networks.**
 
+One-command setup on an installed LXC:
+
+```bash
+sudo bash /opt/timetracker/deploy/enable-web-lxc-update.sh --users alice,bob
+```
+
 Optional environment overrides:
 
 | Variable | Default | Purpose |
