@@ -171,7 +171,7 @@ async function main() {
   r = await req('PUT', '/api/settings', {
     weekStartDay: 1,
     regularHoursPerDay: 7.5,
-    weeklyOvertimeTargetHours: 5,
+    weeklyOvertimeTargetMinutes: 300,
     overtimePeriodStart: '2026-04-13',
     overtimePeriodWeeks: 4,
     defaultLunchMinutes: 30,
@@ -179,6 +179,7 @@ async function main() {
     flexOpeningDate: ''
   });
   assert(r.status === 200 && r.data.regularHoursPerDay === 7.5, 'settings saved');
+  assert(r.data.weeklyOvertimeTargetMinutes === 300, 'overtime target in minutes');
 
   const day = {
     entries: [
@@ -213,7 +214,7 @@ async function main() {
   console.log('\n[6] Import via PUT /api/state');
   const importPayload = {
     version: 1,
-    settings: { weekStartDay: 0, regularHoursPerDay: 6, weeklyOvertimeTargetHours: 0,
+    settings: { weekStartDay: 0, regularHoursPerDay: 6, weeklyOvertimeTargetMinutes: 0,
       overtimePeriodStart: '', overtimePeriodWeeks: 0, defaultLunchMinutes: 0,
       flexOpeningBalance: 0, flexOpeningDate: '' },
     days: {
@@ -419,6 +420,7 @@ async function main() {
   assert(r.status === 200, 'reset -> 200');
   assert(r.data && Object.keys(r.data.days).length === 0, 'days empty after reset');
   assert(r.data && r.data.settings.regularHoursPerDay === 8, 'settings back to defaults after reset');
+  assert(r.data.settings.weeklyOvertimeTargetMinutes === 360, 'default overtime minutes after reset');
   assert(r.data && Array.isArray(r.data.projects) && r.data.projects.length === 0,
     'projects cleared after reset');
 

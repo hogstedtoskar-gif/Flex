@@ -48,8 +48,8 @@ try {
 const DEFAULT_SETTINGS = {
   weekStartDay: 1,
   regularHoursPerDay: 8,
-  weeklyOvertimeTargetHours: 6,
-  weeklyOvertimeTargetsByWeek: [],
+  weeklyOvertimeTargetMinutes: 360,
+  weeklyOvertimeTargetsByWeekMinutes: [],
   overtimePeriodStart: todayKey(),
   overtimePeriodWeeks: 4,
   defaultLunchMinutes: 30,
@@ -79,6 +79,66 @@ function todayKey() {
   const d = new Date();
   const pad = (n) => (n < 10 ? '0' + n : '' + n);
   return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+}
+
+/** Max minutes in a week (7×24×60) — cap for overtime targets. */
+const MAX_OVERTIME_MINUTES_PER_WEEK = 10080;
+
+/**
+ * Migrate legacy hour-based overtime fields to minute-based storage and
+ * strip deprecated keys. Call on every settings read/write/import.
+ */
+function normalizeUserSettings(incoming) {
+  const inc = incoming && typeof incoming === 'object' ? incoming : {};
+  const merged = { ...DEFAULT_SETTINGS, ...inc };
+
+  let minutes;
+  if (Object.prototype.hasOwnProperty.call(inc, 'weeklyOvertimeTargetMinutes')) {
+    minutes = parseInt(inc.weeklyOvertimeTargetMinutes, 10);
+    if (!Number.isFinite(minutes) || minutes < 0) minutes = DEFAULT_SETTINGS.weeklyOvertimeTargetMinutes;
+  } else if (Object.prototype.hasOwnProperty.call(inc, 'weeklyOvertimeTargetHours')) {
+    const h = parseFloat(inc.weeklyOvertimeTargetHours);
+    minutes = Number.isFinite(h) ? Math.round(h * 60) : DEFAULT_SETTINGS.weeklyOvertimeTargetMinutes;
+  } else {
+    minutes = parseInt(merged.weeklyOvertimeTargetMinutes, 10);
+    if (!Number.isFinite(minutes) || minutes < 0) minutes = DEFAULT_SETTINGS.weeklyOvertimeTargetMinutes;
+  }
+  merged.weeklyOvertimeTargetMinutes = Math.min(
+    MAX_OVERTIME_MINUTES_PER_WEEK,
+    Math.max(0, minutes)
+  );
+
+  let listMin;
+  if (Object.prototype.hasOwnProperty.call(inc, 'weeklyOvertimeTargetsByWeekMinutes')) {
+    listMin = inc.weeklyOvertimeTargetsByWeekMinutes;
+  } else if (Object.prototype.hasOwnProperty.call(inc, 'weeklyOvertimeTargetsByWeek')) {
+    const listH = inc.weeklyOvertimeTargetsByWeek;
+    if (Array.isArray(listH) && listH.length) {
+      listMin = listH.map((x) => {
+        if (x == null || x === '') return null;
+        const n = Number(x);
+        return Number.isFinite(n) ? Math.round(n * 60) : null;
+      });
+    } else {
+      listMin = [];
+    }
+  } else {
+    listMin = merged.weeklyOvertimeTargetsByWeekMinutes;
+  }
+  const cleaned = Array.isArray(listMin)
+    ? listMin.map((x) => {
+      if (x == null || x === '') return null;
+      const n = parseInt(x, 10);
+      if (!Number.isFinite(n)) return null;
+      return Math.min(MAX_OVERTIME_MINUTES_PER_WEEK, Math.max(0, n));
+    })
+    : [];
+  while (cleaned.length && cleaned[cleaned.length - 1] == null) cleaned.pop();
+  merged.weeklyOvertimeTargetsByWeekMinutes = cleaned;
+
+  delete merged.weeklyOvertimeTargetHours;
+  delete merged.weeklyOvertimeTargetsByWeek;
+  return merged;
 }
 
 function isDateKey(s) {
@@ -228,7 +288,7 @@ function open(dbPath) {
     const row = stmts.getUserSettings.get(userId);
     let settings = { ...DEFAULT_SETTINGS };
     if (row) {
-      try { settings = { ...DEFAULT_SETTINGS, ...JSON.parse(row.value) }; }
+      try { settings = normalizeUserSettings(JSON.parse(row.value)); }
       catch (_) { /* fall back */ }
     }
     return settings;
@@ -238,7 +298,7 @@ function open(dbPath) {
     if (!settings || typeof settings !== 'object') {
       throw badRequest('settings must be an object');
     }
-    const merged = { ...DEFAULT_SETTINGS, ...settings };
+    const merged = normalizeUserSettings({ ...settings });
     stmts.upsertUserSettings.run(userId, JSON.stringify(merged));
     return merged;
   }
@@ -347,7 +407,7 @@ function open(dbPath) {
       if (state.settings) {
         stmts.upsertUserSettings.run(
           userId,
-          JSON.stringify({ ...DEFAULT_SETTINGS, ...state.settings })
+          JSON.stringify(normalizeUserSettings(state.settings))
         );
       }
       for (const [date, day] of Object.entries(state.days)) {
@@ -838,4 +898,4 @@ function notFound(msg) {
   return err;
 }
 
-module.exports = { open, DEFAULT_SETTINGS };
+module.exports = { open, DEFAULT_SETTINGS, normalizeUserSettings };

@@ -23,6 +23,15 @@ const Calc = (() => {
     return h * 60 + m;
   }
 
+  /** Display total minutes as e.g. "6h 30m" (for overtime targets). */
+  function formatOvertimeMinutes(totalMinutes, opts = {}) {
+    const m = Math.max(0, parseInt(totalMinutes, 10) || 0);
+    const h = Math.floor(m / 60);
+    const mm = m % 60;
+    if (opts.compact && mm === 0) return h + 'h';
+    return h + 'h ' + pad(mm) + 'm';
+  }
+
   function formatHours(hours, opts = {}) {
     if (hours == null || Number.isNaN(hours)) return '—';
     const sign = hours < 0 ? '-' : '';
@@ -387,16 +396,17 @@ const Calc = (() => {
   }
 
   function weekTargetHours(date, settings) {
-    const base = Math.max(0, Number(settings && settings.weeklyOvertimeTargetHours) || 0);
+    const baseMin = Math.max(0, parseInt(settings && settings.weeklyOvertimeTargetMinutes, 10) || 0);
+    const base = baseMin / 60;
     const idx = periodWeekIndex(date, settings);
     if (idx < 0) return base;
-    const list = settings && Array.isArray(settings.weeklyOvertimeTargetsByWeek)
-      ? settings.weeklyOvertimeTargetsByWeek
+    const list = settings && Array.isArray(settings.weeklyOvertimeTargetsByWeekMinutes)
+      ? settings.weeklyOvertimeTargetsByWeekMinutes
       : [];
     const raw = list[idx];
     if (raw == null || raw === '') return base;
-    const parsed = Number(raw);
-    return Number.isFinite(parsed) ? Math.max(0, parsed) : base;
+    const parsed = parseInt(raw, 10);
+    return Number.isFinite(parsed) ? Math.max(0, parsed) / 60 : base;
   }
 
   /**
@@ -741,6 +751,7 @@ const Calc = (() => {
     parseDateKey,
     parseHM,
     formatHours,
+    formatOvertimeMinutes,
     entryMinutes,
     officeWindow,
     entryOfficeSplit,

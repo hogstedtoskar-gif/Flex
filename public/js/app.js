@@ -1474,7 +1474,9 @@
     form.elements['regularHoursPerDay'].value = s.regularHoursPerDay;
     form.elements['officeStart'].value = s.officeStart || '';
     form.elements['officeEnd'].value = s.officeEnd || '';
-    form.elements['weeklyOvertimeTargetHours'].value = s.weeklyOvertimeTargetHours;
+    form.elements['weeklyOvertimeTargetMinutes'].value = s.weeklyOvertimeTargetMinutes != null
+      ? s.weeklyOvertimeTargetMinutes
+      : 360;
     form.elements['overtimePeriodStart'].value = s.overtimePeriodStart || '';
     form.elements['overtimePeriodWeeks'].value = s.overtimePeriodWeeks;
     form.elements['defaultLunchMinutes'].value = s.defaultLunchMinutes;
@@ -1484,8 +1486,8 @@
     form.elements['flexOpeningDate'].value = s.flexOpeningDate || '';
 
     const weekTargetsList = view.querySelector('[data-weekly-targets-list]');
-    const initialOverrides = Array.isArray(s.weeklyOvertimeTargetsByWeek)
-      ? s.weeklyOvertimeTargetsByWeek.slice()
+    const initialOverrides = Array.isArray(s.weeklyOvertimeTargetsByWeekMinutes)
+      ? s.weeklyOvertimeTargetsByWeekMinutes.slice()
       : [];
 
     function readWeekTargetDrafts() {
@@ -1530,8 +1532,8 @@
           UI.el('input', {
             type: 'number',
             min: '0',
-            max: '168',
-            step: '0.25',
+            max: '10080',
+            step: '1',
             value: val,
             'data-week-target-index': String(i)
           })
@@ -1575,8 +1577,10 @@
       App.state.settings = {
         weekStartDay: parseInt(f['weekStartDay'].value, 10),
         regularHoursPerDay: parseFloat(f['regularHoursPerDay'].value) || 0,
-        weeklyOvertimeTargetHours: parseFloat(f['weeklyOvertimeTargetHours'].value) || 0,
-        weeklyOvertimeTargetsByWeek: (() => {
+        weeklyOvertimeTargetMinutes: Math.min(10080, Math.max(0,
+          parseInt(f['weeklyOvertimeTargetMinutes'].value, 10) || 0
+        )),
+        weeklyOvertimeTargetsByWeekMinutes: (() => {
           const out = [];
           const weeks = parseInt(f['overtimePeriodWeeks'].value, 10) || 0;
           const drafts = readWeekTargetDrafts();
@@ -1586,8 +1590,8 @@
               out[i] = null;
               continue;
             }
-            const n = parseFloat(raw);
-            out[i] = Number.isFinite(n) ? Math.max(0, n) : null;
+            const n = parseInt(raw, 10);
+            out[i] = Number.isFinite(n) ? Math.min(10080, Math.max(0, n)) : null;
           }
           while (out.length && out[out.length - 1] == null) out.pop();
           return out;
@@ -1608,6 +1612,50 @@
       UI.toast('Settings saved', 'success');
       render();
     });
+
+    const lxcSec = view.querySelector('[data-lxc-update-section]');
+    const lxcIntro = view.querySelector('[data-lxc-update-intro]');
+    const lxcLog = view.querySelector('[data-lxc-update-log]');
+    const lxcBtn = view.querySelector('[data-action="lxc-update-run"]');
+    (async () => {
+      try {
+        const cap = await Storage.lxcUpdateStatus();
+        if (!cap || !cap.enabled) {
+          if (lxcSec) lxcSec.hidden = true;
+          return;
+        }
+        if (lxcSec) lxcSec.hidden = false;
+        if (lxcIntro) {
+          lxcIntro.textContent = 'Runs `sudo -n bash ' + cap.script + '` on the server (same as deploy/install.sh; restarts the service). '
+            + (cap.restricted ? 'Only accounts listed in LXC_UPDATE_ALLOWED_USERS may run this.' : 'Any signed-in user can run this — enable only on a trusted LAN.');
+        }
+        if (lxcBtn) {
+          lxcBtn.addEventListener('click', async () => {
+            if (!UI.confirmDialog('Run the install / update script now? The app will restart; this page may disconnect briefly.')) return;
+            lxcBtn.disabled = true;
+            if (lxcLog) {
+              lxcLog.hidden = false;
+              lxcLog.textContent = 'Running…';
+            }
+            try {
+              const r = await Storage.lxcUpdateRun();
+              const tail = (r.stdout || '')
+                + (r.stderr ? '\n--- stderr ---\n' + r.stderr : '');
+              if (lxcLog) lxcLog.textContent = tail || ('Exit code ' + r.code);
+              if (r.code === 0) UI.toast('Update finished', 'success');
+              else UI.toast('Update exited with code ' + r.code, 'error');
+            } catch (err) {
+              if (lxcLog) lxcLog.textContent = prettifyError(err);
+              UI.toast(prettifyError(err), 'error');
+            } finally {
+              lxcBtn.disabled = false;
+            }
+          });
+        }
+      } catch (_) {
+        if (lxcSec) lxcSec.hidden = true;
+      }
+    })();
 
     view.querySelector('[data-action="export-json"]').addEventListener('click', () => {
       Storage.exportJson(App.state);

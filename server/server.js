@@ -20,6 +20,7 @@ const express = require('express');
 const { open } = require('./db');
 const auth = require('./auth');
 const quick = require('./quick');
+const lxcUpdate = require('./lxc-update');
 
 const PORT = parseInt(process.env.PORT || '8787', 10);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -366,6 +367,45 @@ api.delete('/days/:date', (req, res, next) => {
 api.post('/reset', (req, res, next) => {
   try { res.json(store.resetUser(req.user.id)); }
   catch (err) { next(err); }
+});
+
+let lxcUpdateBusy = false;
+
+api.get('/admin/lxc-update', (req, res, next) => {
+  try {
+    if (!lxcUpdate.webUpdateEnabled()) {
+      return res.json({ enabled: false });
+    }
+    res.json({
+      enabled: true,
+      script: lxcUpdate.scriptPath(),
+      restricted: lxcUpdate.allowedUsernames().length > 0
+    });
+  } catch (err) { next(err); }
+});
+
+api.post('/admin/lxc-update', async (req, res, next) => {
+  try {
+    if (!lxcUpdate.webUpdateEnabled()) {
+      return res.status(403).json({ error: 'Web-triggered LXC update is disabled' });
+    }
+    if (!lxcUpdate.canUserRun(req.user && req.user.username)) {
+      return res.status(403).json({ error: 'You are not allowed to run the update from this account' });
+    }
+    if (lxcUpdateBusy) {
+      return res.status(409).json({ error: 'An update is already running' });
+    }
+    lxcUpdateBusy = true;
+    try {
+      const result = await lxcUpdate.runInstallScript();
+      res.json(result);
+    } finally {
+      lxcUpdateBusy = false;
+    }
+  } catch (err) {
+    lxcUpdateBusy = false;
+    next(err);
+  }
 });
 
 /* -------- projects -------- */

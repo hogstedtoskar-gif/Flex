@@ -16,8 +16,8 @@ const Storage = (() => {
   const DEFAULT_SETTINGS = {
     weekStartDay: 1,
     regularHoursPerDay: 8,
-    weeklyOvertimeTargetHours: 6,
-    weeklyOvertimeTargetsByWeek: [],
+    weeklyOvertimeTargetMinutes: 360,
+    weeklyOvertimeTargetsByWeekMinutes: [],
     overtimePeriodStart: Calc.toDateKey(new Date()),
     overtimePeriodWeeks: 4,
     defaultLunchMinutes: 30,
@@ -168,6 +168,14 @@ const Storage = (() => {
   function guessTz() {
     try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; }
     catch (_) { return ''; }
+  }
+
+  async function lxcUpdateStatus() {
+    return http('/admin/lxc-update');
+  }
+
+  async function lxcUpdateRun() {
+    return http('/admin/lxc-update', { method: 'POST' });
   }
 
   async function load() {
@@ -566,6 +574,8 @@ const Storage = (() => {
     listTokens,
     createToken,
     deleteToken,
+    lxcUpdateStatus,
+    lxcUpdateRun,
     quickStatus,
     quickAction,
     listProjects,

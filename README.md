@@ -45,6 +45,17 @@ npm run dev
 
 Then open <http://localhost:8787> in any modern browser.
 
+### Web-triggered LXC update (optional)
+
+On a production LXC, `deploy/install.sh` must run as **root**. The UI can trigger it only if the Node process user may run that script without a password. Typical pattern:
+
+1. Install the app so the script exists at `/opt/timetracker/deploy/install.sh` (or set `LXC_UPDATE_SCRIPT`).
+2. Add a **sudoers** snippet for the `timetracker` service user, e.g.  
+   `timetracker ALL=(root) NOPASSWD: /bin/bash /opt/timetracker/deploy/install.sh`
+3. Start the server with `ALLOW_WEB_LXC_UPDATE=1` (and optionally `LXC_UPDATE_ALLOWED_USERS=alice,bob`).
+
+Then **Settings → Server update → Run install / update script** appears. The HTTP request may time out in front of a reverse proxy while the script runs; check `journalctl -u timetracker` on the host. **Do not enable this on untrusted networks.**
+
 Optional environment overrides:
 
 | Variable | Default | Purpose |
@@ -56,6 +67,9 @@ Optional environment overrides:
 | `BOOTSTRAP_USER` | — | If set and no login-capable users exist, create this user on first start. |
 | `BOOTSTRAP_PASSWORD` | — | Password for `BOOTSTRAP_USER`. Required when `BOOTSTRAP_USER` is set. |
 | `ALLOW_REGISTRATION` | — | Set to `1` to expose `POST /api/auth/register` (self-serve sign-up). |
+| `ALLOW_WEB_LXC_UPDATE` | — | Set to `1` to expose **Settings → Server update** and `GET`/`POST /api/admin/lxc-update` (runs the install script via `sudo -n`; see below). |
+| `LXC_UPDATE_SCRIPT` | `/opt/timetracker/deploy/install.sh` | Bash script path passed to `sudo -n bash …`. |
+| `LXC_UPDATE_ALLOWED_USERS` | — | Optional comma-separated usernames allowed to POST; if unset, any signed-in user may run it when `ALLOW_WEB_LXC_UPDATE=1`. |
 
 ## Users & authentication
 
@@ -157,6 +171,8 @@ All `/api/*` endpoints except the ones marked *public* require the `tt_session` 
 | `PUT` | `/api/state` | full state | replaces everything (used by Import JSON) |
 | `PUT` | `/api/settings` | settings object | merged + persisted settings |
 | `PUT` | `/api/days/:date` | `{ entries, note, pto? }` | the saved day, or 204 if it became empty (a PTO-only day uses `entries: []`, empty `note`, and `pto: true`) |
+| `GET` | `/api/admin/lxc-update` | — | `{ enabled, script?, restricted? }` — requires session; `enabled` is true only when `ALLOW_WEB_LXC_UPDATE=1` |
+| `POST` | `/api/admin/lxc-update` | — | runs `sudo -n bash` on `LXC_UPDATE_SCRIPT`; JSON `{ code, stdout, stderr }`; 403 if disabled or user not allowed |
 | `DELETE` | `/api/days/:date` | — | 204 |
 | `POST` | `/api/reset` | — | empty default state |
 | `GET` | `/api/auth/tokens` | — | list of phone-widget tokens (no plaintext) |
@@ -394,6 +410,7 @@ widget. Revoking a token is immediate.
    - If `officeStart`/`officeEnd` are blank or invalid the window is disabled and all hours are treated as in-office.
    - **Non-working days (default Sat/Sun)** are the exception: every worked minute is routed straight to `extraOutside` (overtime-only), `regular`/`extraInOffice` are always 0, and `shortfall` is always 0. The set of working days is configurable per user in Settings → Work days.
 2. Per week (starts on the configured day), days are walked in order:
+   - The weekly overtime **target** is configured in **whole minutes** (default 360 = 6h), optionally overridden per week inside the overtime period.
    - Inside the overtime period, the weekly overtime target is filled from `extraOutside` **first** (use-it-or-lose-it — outside hours can never become flex), then from `extraInOffice`. Any leftover `extraInOffice` becomes `flex gain`. Any leftover `extraOutside` is counted as `outsideUnused` and is discarded.
    - Outside the overtime period, all `extraInOffice` becomes flex gain and all `extraOutside` is discarded.
    - `flex net = flex gain - shortfall`.
@@ -410,8 +427,8 @@ Configurable in the Settings view:
 | Regular hours per day | Threshold above which hours become "extra" |
 | Work days | Which weekdays are working days (default Mon–Fri). Worked time on unchecked days can only fill the weekly overtime target — never becomes regular or flex, and never creates shortfall. The weekly "Regular hours" progress bar target is `regularHoursPerDay × (number of checked days)`. |
 | Office hours start / end | Work outside this window can only become overtime — never regular or flex. Leave blank to disable. |
-| Weekly overtime target | Default extra hours per week that count as ordered overtime before overflowing to flex |
-| Per-week overtime targets | Optional week-by-week overrides within the overtime period (leave a week blank to use the default weekly target) |
+| Weekly overtime target | Default overtime **minutes** per week (integer, 0–10080) before overflowing to flex (default 360 = 6h) |
+| Per-week overtime targets | Optional week-by-week overrides in **minutes** within the overtime period (leave blank to use the default) |
 | Overtime period start | First day of the ordered-overtime period |
 | Overtime period length | Number of weeks the overtime order applies |
 | Default lunch | Informational default (currently used as a reference only) |
@@ -441,7 +458,7 @@ For automated backups, just snapshot the SQLite file (e.g. nightly `cp /var/lib/
 ```json
 {
   "version": 1,
-  "settings": { "weekStartDay": 1, "regularHoursPerDay": 8, "...": "..." },
+  "settings": { "weekStartDay": 1, "regularHoursPerDay": 8, "weeklyOvertimeTargetMinutes": 360, "...": "..." },
   "days": {
     "2026-04-17": {
       "entries": [

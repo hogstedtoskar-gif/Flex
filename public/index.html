@@ -337,11 +337,11 @@
             <input type="text" class="time24" name="officeEnd" placeholder="17:30" />
           </label>
           <label>
-            <span>Weekly overtime target (hours)</span>
-            <input type="number" name="weeklyOvertimeTargetHours" min="0" max="168" step="0.25" />
+            <span>Weekly overtime target (minutes) <em class="muted small">(1–10080, whole minutes)</em></span>
+            <input type="number" name="weeklyOvertimeTargetMinutes" min="0" max="10080" step="1" />
           </label>
           <fieldset>
-            <legend>Per-week overtime targets <em class="muted small">(optional overrides)</em></legend>
+            <legend>Per-week overtime targets <em class="muted small">(optional overrides, minutes)</em></legend>
             <div class="muted small">
               Leave a week blank to use the default weekly overtime target.
             </div>
@@ -425,6 +425,18 @@
           </label>
         </div>
         <p class="muted small">Import replaces all current data after confirmation.</p>
+      </div>
+
+      <div class="card" data-lxc-update-section hidden>
+        <div class="card-header">
+          <h2>Server update</h2>
+          <span class="muted">LXC / install.sh</span>
+        </div>
+        <p class="muted small" data-lxc-update-intro></p>
+        <div class="form-actions">
+          <button type="button" class="btn btn-warning" data-action="lxc-update-run">Run install / update script</button>
+        </div>
+        <pre class="lxc-update-log" data-lxc-update-log hidden></pre>
       </div>
 
       <div class="card">

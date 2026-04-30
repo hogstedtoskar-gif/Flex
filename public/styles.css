@@ -525,6 +525,20 @@ input.time24.invalid {
   font-weight: 600;
 }
 
+.lxc-update-log {
+  margin-top: 12px;
+  padding: 12px;
+  max-height: 280px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.4;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .note-block textarea {
   background: var(--bg-elevated);
   color: var(--text);
